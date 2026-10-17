@@ -1,0 +1,143 @@
+// UI: crisp DOM panels floating over the 3D scene — the hybrid approach.
+// The world behind is live (rotating hero on the pedestal, course beyond);
+// text/buttons are real DOM so Arabic shaping, RTL and a11y are free.
+
+import { t, onLangChange } from './i18n.js';
+import { HERO_IDS, CHARACTERS } from './hero.js';
+
+const heroColorCss = (id) =>
+  '#' + CHARACTERS[id].color.toString(16).padStart(6, '0');
+
+export class UI {
+  constructor(root, cb) {
+    this.root = root;
+    this.cb = cb;
+    this.heroIndex = 0;
+    this.root.innerHTML = `
+      <div class="screen" id="sc-title">
+        <div class="panel center grow">
+          <h1 class="logo">SUPER <span>PIXEL</span> BROS <em>3D</em></h1>
+          <p class="tagline" data-key="tagline"></p>
+          <button class="btn big" id="b-start" data-key="press_enter"></button>
+          <p class="keys"><span data-key="controls.move"></span></p>
+          <p class="keys dim"><span data-key="controls.actions"></span></p>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="sc-select">
+        <div class="topbar">
+          <h2 data-key="choose_hero"></h2>
+        </div>
+        <div class="select-row">
+          <button class="btn round" id="b-prev">◀</button>
+          <div class="hero-card panel">
+            <div class="hero-dot" id="hero-dot"></div>
+            <h3 id="hero-name"></h3>
+            <p id="hero-blurb" class="blurb"></p>
+            <div class="stat"><span data-key="spd"></span><div class="bar"><i id="bar-spd"></i></div></div>
+            <div class="stat"><span data-key="jmp"></span><div class="bar"><i id="bar-jmp"></i></div></div>
+          </div>
+          <button class="btn round" id="b-next">▶</button>
+        </div>
+        <button class="btn big accent" id="b-play" data-key="btn.play"></button>
+        <p class="keys dim" data-key="select_hint"></p>
+      </div>
+
+      <div class="hud hidden" id="sc-hud">
+        <div class="hud-box" id="hud-coins"></div>
+        <div class="hud-box" id="hud-time"></div>
+      </div>
+
+      <div class="screen hidden" id="sc-pause">
+        <div class="panel card">
+          <h2 data-key="paused"></h2>
+          <div class="col">
+            <button class="btn" id="b-resume" data-key="pause.resume"></button>
+            <button class="btn" id="b-retry" data-key="pause.retry"></button>
+            <button class="btn ghost" id="b-title" data-key="pause.quit"></button>
+          </div>
+          <p class="keys dim" data-key="pause_hint"></p>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="sc-clear">
+        <div class="panel card">
+          <div class="trophy">🏆</div>
+          <h2 data-key="clear.title"></h2>
+          <p class="trophy-sub" data-key="clear.trophy"></p>
+          <p class="result" id="clear-time"></p>
+          <p class="result" id="clear-coins"></p>
+          <button class="btn big accent" id="b-done" data-key="clear.hint"></button>
+        </div>
+      </div>
+
+      <div class="rotate hidden" id="rotate" data-key="rotate"></div>
+    `;
+    this.bind('b-start', () => this.cb.onStart());
+    this.bind('b-prev', () => this.cb.onMove(-1));
+    this.bind('b-next', () => this.cb.onMove(1));
+    this.bind('b-play', () => this.cb.onPlay());
+    this.bind('b-resume', () => this.cb.onResume());
+    this.bind('b-retry', () => this.cb.onRetry());
+    this.bind('b-title', () => this.cb.onTitle());
+    this.bind('b-done', () => this.cb.onTitle());
+    onLangChange(() => this.renderTexts());
+    this.renderTexts();
+  }
+
+  bind(id, fn) {
+    const el = this.root.querySelector('#' + id);
+    el.addEventListener('click', (e) => { e.currentTarget.blur(); fn(); });
+  }
+
+  renderTexts() {
+    this.root.querySelectorAll('[data-key]').forEach((el) => {
+      el.textContent = t(el.dataset.key);
+    });
+    this.setHero(this.heroIndex);
+  }
+
+  show(name) {
+    const map = {
+      title: ['sc-title'], select: ['sc-select'], play: ['sc-hud'],
+      pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'],
+    };
+    const ids = new Set(map[name] || []);
+    for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear']) {
+      this.root.querySelector('#' + id).classList.toggle('hidden', !ids.has(id));
+    }
+  }
+
+  setHero(index) {
+    this.heroIndex = index;
+    const id = HERO_IDS[index];
+    this.root.querySelector('#hero-dot').style.background = heroColorCss(id);
+    this.root.querySelector('#hero-name').textContent = t(`hero.${id}.name`);
+    this.root.querySelector('#hero-blurb').textContent = t(`hero.${id}.blurb`);
+    const d = CHARACTERS[id];
+    this.root.querySelector('#bar-spd').style.width =
+      Math.round((d.speed / 10.6) * 100) + '%';
+    this.root.querySelector('#bar-jmp').style.width =
+      Math.round((d.jump / 13.0) * 100) + '%';
+  }
+
+  hud(coins, coinTotal, timeSec) {
+    this.root.querySelector('#hud-coins').textContent =
+      t('hud.coins', { n: coins + ' / ' + coinTotal });
+    this.root.querySelector('#hud-time').textContent =
+      t('hud.time', { t: fmtTime(timeSec) });
+  }
+
+  clearStats(timeSec, coins, coinTotal) {
+    this.root.querySelector('#clear-time').textContent =
+      t('clear.time', { t: fmtTime(timeSec) });
+    this.root.querySelector('#clear-coins').textContent =
+      t('clear.coins', { n: coins, m: coinTotal });
+  }
+}
+
+export function fmtTime(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  const cs = Math.floor((sec * 100) % 100);
+  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}

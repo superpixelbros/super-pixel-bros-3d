@@ -1,0 +1,13 @@
+{
+  "name": "Super Pixel Bros 3D",
+  "short_name": "PixelBros 3D",
+  "description": "A Crash-style 3D platformer in the browser. Vanilla JS + three.js, zero build step.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0e1c2b",
+  "theme_color": "#0e1c2b",
+  "lang": "en",
+  "categories": ["games"]
+}
