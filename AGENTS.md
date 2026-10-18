@@ -41,24 +41,27 @@ node tools/headless.mjs
 ```
 
 `headless.mjs` is the seed of the test suite: i18n key parity, the Input
-edge-trigger contract, then full Rapier-physics runs — auto-run, jump arc,
-coins, checkpoints, fall-respawn, finish — and per-hero reachability
-(every hero must clear the first gap + both steps under its own jump
-envelope). Extend it with every course/hero-stat change, like the 2D
-project's `check-reachability.mjs`.
+edge-trigger contract, full Rapier-physics runs (auto-run, jump arc, coins,
+checkpoints, fall-respawn, finish), **per-hero × per-level full clears** —
+every hero must CLEAR every level death-free via a bot that jumps inside
+`course.jumpZones` — a rivals race check (autopilot must progress + finish),
+and the adventure-map logic. Run it after ANY edit to `levels.js`,
+`hero.js`, `game.js` or `rivals.js`.
 
 ## Architecture
 
 | File | Responsibility |
 |---|---|
-| `js/main.js` | boot, state machine (`title/select/play/pause/clear`), fixed 60 Hz loop, key routing, resize, SW registration (never on localhost) |
-| `js/game.js` | the run: owns Rapier `World`, course, player; `start()` rebuilds everything per run; coin/checkpoint/respawn/finish rules. **No DOM, no three** |
-| `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin. **No three** |
-| `js/course.js` | "Sunny Shore": static ground/steps, kinematic hammer + bobbing pillar, coin/checkpoint/decor data. **No three** |
+| `js/main.js` | boot, state routing (`title/select/map/play/pause/clear/victory`), fixed 60 Hz loop, key routing, progress persistence, resize, SW registration (never on localhost) |
+| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic; coin/checkpoint/respawn/finish/placement rules; `sfx()` no-op hook injected by main. **No DOM, no three** |
+| `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags. `HERO_RADIUS`/`HERO_HALF` are the size source of truth. **No three** |
+| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme}]` + shared kit (ground/step/coin, hammer, pillar) + `courseStep()`. Sunny Shore + Sunset Ridge. **No three** |
+| `js/rivals.js` | 3 autopiloted `Player` instances (custom stat defs, lanes, jitter, vault-if-blocked, checkpoint respawn); `placement()` for the HUD. Solid kinematic capsules — shoving works. Netcode seam: inputs → determinate sim. **No three** |
+| `js/audio.js` | WebAudio synth: SFX (jump/land/spin/coin/checkpoint/fall/clear/trophy/menu) + one original chiptune loop per stage, ducked on pause; `pixelbros3d_mute`; unlock on first gesture |
 | `js/phys.js` | Rapier init + world factory; `STEP = 1/60` |
-| `js/renderer.js` | three.js scene: lights/shadows/fog/sea, course meshes rebuilt per run, hero rig, follow/menu cameras |
+| `js/renderer.js` | three.js scene: lights/shadows/fog/sea, per-level THEMES applied by `buildCourse`, course meshes, hero rig, rival meshes (`setRivals`), map diorama, follow/menu/map cameras |
 | `js/models.js` | procedural hero builder (boxes), `style` variants cap/keffiyeh/fletch |
-| `js/ui.js` | DOM screens (title/select/HUD/pause/clear) with `data-key` re-render on language change |
+| `js/ui.js` | DOM screens (title/select/HUD+place/pause/clear/map/victory) with `data-key` re-render on language change |
 | `js/i18n.js` | en/ar tables, `t()`, `L` toggle, `<html lang/dir>`; `pixelbros3d_lang` |
 | `js/input.js` | keyboard + virtual keys, edge triggers, `endFrame()` — ported 1:1 from 2D |
 | `js/view.js` | viewport metrics: dpr cap 2, portrait/coarse flags |
@@ -66,10 +69,10 @@ project's `check-reachability.mjs`.
 | `manifest.webmanifest` | standalone, landscape, relative scope |
 
 **The import boundary is the architecture**: `game.js`, `hero.js`,
-`course.js`, `phys.js`, `i18n.js`, `input.js` must never import three.js or
-touch the DOM (i18n guards `document`/`localStorage` behind `typeof`), so
-they run under plain Node for headless checks. `renderer.js`/`models.js`/
-`ui.js`/`main.js` are the browser-only edge.
+`levels.js`, `rivals.js`, `phys.js`, `i18n.js`, `input.js` must never import
+three.js or touch the DOM (i18n/audio guard `document`/`localStorage`
+behind `typeof`), so they run under plain Node for headless checks.
+`renderer.js`/`models.js`/`ui.js`/`main.js`/`audio.js` are the browser edge.
 
 ## Rapier gotchas (0.21 — the docs online are mostly older)
 
@@ -115,16 +118,36 @@ they run under plain Node for headless checks. `renderer.js`/`models.js`/
 - Fixed 60 Hz everywhere; per-tick, deterministic, testable.
 - Auto-run along **+Z** (Crash-style); steering is one axis, jump is hold-
   for-height with a −0.45× release cut, coyote 6f, buffer 7f.
-- **Design for the worst hero**: Faris (4.8 m/s) clears a bare gap of ≈3.4m
-  at full hold, Sahm's low jump tops out ≈1.6m — bare gaps ≤ 3m, step-ups
-  ≤ 0.7m, everything wider needs a bridge within reach (see course rules in
-  `course.js`). Headless roster test enforces it.
+- **Design for the worst hero**: Faris (4.8 m/s) full-hold clears a bare gap
+  of ≈4.3m (≈4m of usable margin), Sahm's low jump tops out ≈1.6m — bare
+  gaps ≤ 3m, step-ups ≤ 0.7m, everything wider needs a crossing within
+  reach. Headless enforces: **every hero × every level must fully clear,
+  death-free**.
+- **`jumpZones` are ground truth**: every z-range where a jump is required
+  (gaps, pillar hops, step hops) must be listed in the level's
+  `jumpZones.push(...)` — the reachability bot AND rival autopilots jump
+  from them. If you add geometry, add the zone; if the headless roster test
+  stalls at some z, you forgot or mistuned one. `narrows` ([z0, z1,
+  maxLaneRadius]) tells rivals where the floor is thin (pillar crossings,
+  ledge stretches) so their lanes converge — keep in sync too.
+- **Crossing geometry**: make bobbing-pillar tops ≤ 0.9m so every hero (and
+  rival) can land on them at any phase, and let pillar edges OVERLAP each
+  other and the landing ground — seams between platforms are death traps
+  for mid-speed heroes whose arc falls in them (this bit Shore's original
+  pillar gap).
 - **Steering sign**: the follow camera faces +Z, which flips world X
   relative to the screen — keyboard→game steering is negated in `main.js`.
   If controls ever feel mirrored again, that line is the first suspect.
 - Course height budget: no fall deeper than the respawn kill plane (−12).
-- Units: metres; hero capsule = 0.35 radius + 0.35 half-height (1.4m tall),
-  mesh origin at the feet, capsule center is `pos` (mesh at `pos.y − 0.7`).
+- Units: metres; hero capsule = `HERO_RADIUS` 0.315 + `HERO_HALF` 0.315
+  (total 1.26m). Meshes build at 1.4m and the renderer scales `play:`/
+  `map:` heroes (0.9× / 0.45×) so collider and mesh shrink together —
+  feet offset derives from `HERO_HALF + HERO_RADIUS`, never hardcoded.
+- **Adventure flow**: title → select → map (3D diorama, two islands, hero
+  walks node-to-node, ◀ ▶ replay cleared stages) → run → clear → map →
+  … → victory card. Frontier persists via `pixelbros3d_progress`.
+- Controls: `L` language, `M` mute, `ESC` pause, `R` retry, `Q` title.
+  Audio unlocks on first gesture; music ducks while paused.
 - UI text goes through `t('key')` with entries in **both** en and ar
   tables; Arabic is real DOM so shaping/RTL are native — keep Latin key
   names (ENTER, WASD) inside translations; Western digits only.
@@ -144,18 +167,18 @@ they run under plain Node for headless checks. `renderer.js`/`models.js`/
 
 ## Roadmap (agreed order)
 
-1. **M0 vertical slice** ✅ this repo today: course, heroes, menus, i18n,
-   headless checks.
-2. Touch controls: virtual stick + jump/spin buttons feeding `Input.tap`,
-   canvas hot spots on menu panels (port the 2D hot-spot pattern to DOM).
-3. Audio: WebAudio synth SFX + music (port the 2D `audio.js` DNA).
-4. AI rivals racing you + place HUD (the netcode seam).
+1. **M0 vertical slice** ✅: course, heroes, menus, i18n, headless checks.
+2. Touch controls — **explicitly deferred** ("not for now"): virtual stick
+   + jump/spin buttons feeding `Input.tap`, DOM hot-spot pattern from 2D.
+3. Audio ✅: WebAudio synth SFX + per-stage chiptune, mute key, ducking.
+4. AI rivals ✅: 3 autopiloted racers, solid contact, place HUD + finish
+   place on the clear screen (netcode seam: flags in, determinate sim out).
 5. Badges/relics: time trial tiers + all-coins challenge, shown on the
    clear screen; best times via localStorage.
 6. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
    `gen-icons.mjs` pattern), GitHub Pages deploy for the new
    `superpixelbros/super-pixel-bros-3d` repo (enabled — pending).
-7. More levels.
+7. More levels (`LEVELS` entries + diorama nodes grow automatically).
 
 ## Ideas that fit
 

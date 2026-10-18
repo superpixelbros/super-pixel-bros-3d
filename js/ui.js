@@ -4,6 +4,7 @@
 
 import { t, onLangChange } from './i18n.js';
 import { HERO_IDS, CHARACTERS } from './hero.js';
+import { FIELD_SIZE } from './rivals.js';
 
 const heroColorCss = (id) =>
   '#' + CHARACTERS[id].color.toString(16).padStart(6, '0');
@@ -45,6 +46,7 @@ export class UI {
 
       <div class="hud hidden" id="sc-hud">
         <div class="hud-box" id="hud-coins"></div>
+        <div class="hud-box" id="hud-place"></div>
         <div class="hud-box" id="hud-time"></div>
       </div>
 
@@ -67,7 +69,31 @@ export class UI {
           <p class="trophy-sub" data-key="clear.trophy"></p>
           <p class="result" id="clear-time"></p>
           <p class="result" id="clear-coins"></p>
+          <p class="result" id="clear-place"></p>
           <button class="btn big accent" id="b-done" data-key="clear.hint"></button>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="sc-map">
+        <div class="topbar"><h2 data-key="map.title"></h2></div>
+        <div class="map-panel panel">
+          <h3 id="map-stage"></h3>
+          <p id="map-state" class="blurb"></p>
+          <div class="map-btns">
+            <button class="btn round" id="b-map-prev">◀</button>
+            <button class="btn big accent" id="b-map-play" data-key="btn.play"></button>
+            <button class="btn round" id="b-map-next">▶</button>
+          </div>
+          <p class="keys dim" data-key="map.hint"></p>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="sc-victory">
+        <div class="panel card">
+          <div class="trophy">🏆</div>
+          <h2 data-key="victory.title"></h2>
+          <p class="trophy-sub" data-key="victory.sub"></p>
+          <button class="btn big accent" id="b-victory" data-key="victory.hint"></button>
         </div>
       </div>
 
@@ -80,7 +106,11 @@ export class UI {
     this.bind('b-resume', () => this.cb.onResume());
     this.bind('b-retry', () => this.cb.onRetry());
     this.bind('b-title', () => this.cb.onTitle());
-    this.bind('b-done', () => this.cb.onTitle());
+    this.bind('b-done', () => this.cb.onDone());
+    this.bind('b-victory', () => this.cb.onTitle());
+    this.bind('b-map-prev', () => this.cb.onMapMove(-1));
+    this.bind('b-map-next', () => this.cb.onMapMove(1));
+    this.bind('b-map-play', () => this.cb.onMapPlay());
     onLangChange(() => this.renderTexts());
     this.renderTexts();
   }
@@ -100,10 +130,12 @@ export class UI {
   show(name) {
     const map = {
       title: ['sc-title'], select: ['sc-select'], play: ['sc-hud'],
-      pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'],
+      pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'], map: ['sc-map'],
+      victory: ['sc-victory'],
     };
     const ids = new Set(map[name] || []);
-    for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear']) {
+    for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear',
+      'sc-map', 'sc-victory']) {
       this.root.querySelector('#' + id).classList.toggle('hidden', !ids.has(id));
     }
   }
@@ -121,18 +153,33 @@ export class UI {
       Math.round((d.jump / 13.0) * 100) + '%';
   }
 
-  hud(coins, coinTotal, timeSec) {
+  hud(coins, coinTotal, timeSec, place) {
     this.root.querySelector('#hud-coins').textContent =
       t('hud.coins', { n: coins + ' / ' + coinTotal });
     this.root.querySelector('#hud-time').textContent =
       t('hud.time', { t: fmtTime(timeSec) });
+    this.root.querySelector('#hud-place').textContent =
+      t('hud.place', { p: place, m: FIELD_SIZE });
   }
 
-  clearStats(timeSec, coins, coinTotal) {
+  clearStats(timeSec, coins, coinTotal, hasNext, place) {
     this.root.querySelector('#clear-time').textContent =
       t('clear.time', { t: fmtTime(timeSec) });
     this.root.querySelector('#clear-coins').textContent =
       t('clear.coins', { n: coins, m: coinTotal });
+    this.root.querySelector('#clear-place').textContent =
+      t('clear.place', { p: place, m: FIELD_SIZE });
+    // frontier stage continues to the map; the last one ends the game
+    const b = this.root.querySelector('#b-done');
+    b.dataset.key = hasNext ? 'clear.hint_next' : 'clear.hint';
+    b.textContent = t(b.dataset.key);
+  }
+
+  setMap(num, name, cleared) {
+    this.root.querySelector('#map-stage').textContent =
+      t('map.stage', { n: num, name });
+    this.root.querySelector('#map-state').textContent =
+      cleared ? t('map.cleared') : t('map.frontier');
   }
 }
 

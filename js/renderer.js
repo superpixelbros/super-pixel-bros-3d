@@ -5,8 +5,11 @@
 import * as THREE from 'three';
 import { view } from './view.js';
 import { buildHero } from './models.js';
-import { CHARACTERS } from './hero.js';
+import { CHARACTERS, HERO_RADIUS, HERO_HALF } from './hero.js';
+import { LEVELS } from './levels.js';
 
+// capsule center → feet, derived from the collider constants
+const FEET = HERO_HALF + HERO_RADIUS;
 const SKY = 0x9ad8f5;
 
 export class Renderer {
@@ -29,8 +32,8 @@ export class Renderer {
     this.cam = new THREE.PerspectiveCamera(58, 16 / 9, 0.1, 160);
     this.cam.position.set(0, 3, -9);
 
-    const hemi = new THREE.HemisphereLight(0xcfeaff, 0x8a7a55, 1.05);
-    this.scene.add(hemi);
+    this.hemi = new THREE.HemisphereLight(0xcfeaff, 0x8a7a55, 1.05);
+    this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff2d8, 1.9);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(512, 512);
@@ -39,11 +42,9 @@ export class Renderer {
     this.sun.shadow.camera.updateProjectionMatrix();
     this.scene.add(this.sun, this.sun.target);
 
-    // sea + menu pedestal live forever; course meshes are rebuilt per run
-    const sea = new THREE.Mesh(
-      new THREE.PlaneGeometry(420, 420),
-      new THREE.MeshLambertMaterial({ color: 0x2f8fd0 })
-    );
+    // sea + menu pedestal + map diorama live forever; course meshes rebuild
+    this.seaMat = new THREE.MeshLambertMaterial({ color: 0x2f8fd0 });
+    const sea = new THREE.Mesh(new THREE.PlaneGeometry(420, 420), this.seaMat);
     sea.rotation.x = -Math.PI / 2;
     sea.position.set(-60, -1.7, 40);
     this.scene.add(sea);
@@ -58,13 +59,74 @@ export class Renderer {
 
     this.courseGroup = new THREE.Group();
     this.scene.add(this.courseGroup);
+    this.rivalGroup = new THREE.Group();
+    this.scene.add(this.rivalGroup);
+    this.rivalParts = [];
 
-    this.heroKey = null;   // 'play:rosso' | 'menu:rosso'
+    this.buildDiorama();
+
+    this.heroKey = null;   // 'play:rosso' | 'menu:rosso' | 'map:rosso'
     this.heroParts = null;
     this.menuAngle = 0;
     this.camPos = new THREE.Vector3(0, 3, -9);
     this.camLook = new THREE.Vector3(0, 1.2, 0);
     this.resize();
+  }
+
+  // ---- adventure map diorama (persistent) --------------------------------
+  // Two themed islands on the sea, bridge, a flag per stage, gold cursor
+  // ring. Node i sits at x = i*6 — keep in sync with Game.mapHeroPos().
+  buildDiorama() {
+    const g = this.diorama = new THREE.Group();
+    g.visible = false;
+    this.scene.add(g);
+    const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+
+    LEVELS.forEach((lvl, i) => {
+      const island = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.55, 1.9, 0.9, 9),
+        mat(lvl.theme.sand)
+      );
+      island.position.set(i * 6, 0, 0);
+      island.receiveShadow = true;
+      g.add(island);
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 1.1, 6), mat(0xd8d4c8));
+      pole.position.set(i * 6 + 0.85, 1.0, -0.7);
+      const flag = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.32, 0.03), mat(i === LEVELS.length - 1 ? 0xffd23e : 0xe04a3f));
+      flag.position.set(i * 6 + 1.08, 1.36, -0.7);
+      g.add(pole, flag);
+    });
+
+    const bridge = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 0.22, 0.7), mat(0x8a5a33));
+    bridge.position.set(3, 0.34, 0);
+    g.add(bridge);
+
+    this.mapRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20),
+      mat(0xffd23e)
+    );
+    this.mapRing.position.set(0, 0.48, 0);
+    g.add(this.mapRing);
+  }
+
+  // ---- rival meshes (rebuilt every race) -----------------------------------
+  setRivals(rivals) {
+    for (const parts of this.rivalParts) {
+      this.rivalGroup.remove(parts.group);
+      parts.group.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+    }
+    this.rivalParts = (rivals || []).map((r) => {
+      const parts = buildHero(r.player.def);
+      parts.group.scale.setScalar(0.9);
+      this.rivalGroup.add(parts.group);
+      return parts;
+    });
   }
 
   // ---- course meshes (rebuilt every run) --------------------------------
@@ -78,13 +140,22 @@ export class Renderer {
 
   buildCourse(course) {
     this.clearCourse();
+    const th = course.theme;
+    // the level's theme owns the whole mood: sky, fog, sea, light
+    this.scene.background.setHex(th.sky);
+    this.scene.fog.color.setHex(th.sky);
+    this.seaMat.color.setHex(th.sea);
+    this.sun.color.setHex(th.sun);
+    this.hemi.color.setHex(th.sky).multiplyScalar(0.85);
+    this.hemi.groundColor.setHex(th.hemiGround);
+
     const mat = (color) => new THREE.MeshLambertMaterial({ color });
     const add = (mesh, x, y, z) => {
       mesh.position.set(x, y, z);
       this.courseGroup.add(mesh);
       return mesh;
     };
-    const sand = mat(0xe7d29a), rock = mat(0xa9a294), wood = mat(0x8a5a33);
+    const sand = mat(th.sand), rock = mat(th.rock), wood = mat(th.wood);
 
     for (const s of course.segs) {
       const m = add(new THREE.Mesh(
@@ -92,7 +163,7 @@ export class Renderer {
       (s.x0 + s.x1) / 2, s.top - 1, (s.z0 + s.z1) / 2);
       m.receiveShadow = true;
     }
-    const sandDark = mat(0xd3ba7e);
+    const sandDark = mat(th.sandDark);
     for (const s of course.shoulders) {
       const m = add(new THREE.Mesh(
         new THREE.BoxGeometry(s.x1 - s.x0, 2, s.z1 - s.z0), sandDark),
@@ -133,8 +204,9 @@ export class Renderer {
     });
 
     this.pillarMeshes = course.pillars.map((p) => {
-      const m = add(new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 1.8), wood),
-        0.4, 0.55, p.z);
+      const m = add(new THREE.Mesh(
+        new THREE.BoxGeometry(p.half * 2, 0.6, p.half * 2), wood),
+      p.x, p.y0, p.z);
       m.castShadow = true;
       return { body: p.body, m };
     });
@@ -185,6 +257,9 @@ export class Renderer {
     const [mode, id] = key.split(':');
     const def = CHARACTERS[id] || CHARACTERS.rosso;
     this.heroParts = buildHero(def);
+    // 10% smaller in play; menu showcase full size; map diorama tiny
+    const scale = mode === 'play' ? 0.9 : mode === 'map' ? 0.45 : 1;
+    this.heroParts.group.scale.setScalar(scale);
     this.scene.add(this.heroParts.group);
     this.heroKey = key;
   }
@@ -215,10 +290,15 @@ export class Renderer {
       }
     }
 
+    // which world we're looking at
+    this.courseGroup.visible = !!game.course && state !== 'map';
+    this.pedestal.visible = state === 'title' || state === 'select';
+    this.diorama.visible = state === 'map';
+
     if (p) {
       const pos = p.pos;
       const hp = this.heroParts.group;
-      hp.position.set(pos.x, pos.y - 0.7, pos.z);
+      hp.position.set(pos.x, pos.y - FEET, pos.z);
       hp.rotation.y = p.yaw;
       // spin-attack: whole-body pirouette
       if (p.spinT > 0) {
@@ -230,14 +310,46 @@ export class Renderer {
       }
     }
 
+    // rivals race only inside the course world
+    this.rivalGroup.visible = (state === 'play' || state === 'pause'
+      || state === 'clear') && this.rivalParts.length > 0;
+    if (this.rivalGroup.visible) {
+      for (let i = 0; i < game.rivals.length; i++) {
+        const p = game.rivals[i].player;
+        const parts = this.rivalParts[i];
+        const pos = p.pos;
+        const g = parts.group;
+        g.position.set(pos.x, pos.y - FEET, pos.z);
+        g.rotation.y = p.yaw;
+        if (p.spinT > 0) g.rotation.y += p.spinT * 1.4;
+        else if (!p.grounded) poseAir(p, parts);
+        else poseWalk(p, parts, g);
+      }
+    }
+
     // menu hero idles on the pedestal, slowly turning
-    if (!p && this.heroParts) {
+    if (!p && this.heroParts && state !== 'map') {
       const hp = this.heroParts.group;
       hp.position.set(0, 0.42 + Math.sin(t * 2) * 0.02, -14);
       hp.rotation.y = t * 0.7;
       const s = Math.sin(t * 4) * 0.12;   // tiny ready-bounce
       this.heroParts.armL.rotation.x = s;
       this.heroParts.armR.rotation.x = -s;
+    }
+
+    // map hero stands on (or walks between) the diorama nodes
+    if (state === 'map' && this.heroParts) {
+      const mp = game.mapHeroPos();
+      const hp = this.heroParts.group;
+      hp.position.set(mp.x, 0.46, 0);
+      hp.rotation.y = Math.PI / 2;        // face the next island
+      const s = mp.walking ? Math.sin(t * 11) * 0.7 : 0;
+      this.heroParts.legL.rotation.x = s;
+      this.heroParts.legR.rotation.x = -s;
+      this.heroParts.armL.rotation.x = -s * 0.6;
+      this.heroParts.armR.rotation.x = s * 0.6;
+      this.mapRing.position.x = game.map.cursor * 6;
+      this.mapRing.rotation.y = t * 0.8;
     }
 
     // camera
@@ -248,15 +360,22 @@ export class Renderer {
         Math.sin(a) * 4.4, 2.1, -14 + Math.cos(a) * 4.4,
         0, 1.1, -14
       );
+    } else if (state === 'map') {
+      this.lerpCam(
+        3 + Math.sin(t * 0.18) * 0.7, 4.3, 7.2,
+        3, 0.5, 0
+      );
     } else if (p) {
       const pos = p.pos;
       this.lerpCam(
-        pos.x * 0.62, pos.y + 2.6, pos.z - 5.4,
+        pos.x * 0.62, pos.y + 2.5, pos.z - 5.4,
         pos.x * 0.45, pos.y - 0.2, pos.z + 4.5
       );
     }
-    // sun follows the hero so the shadow frustum stays local
-    const sx = p ? p.pos.x : 0, sz = p ? p.pos.z : -14;
+    // sun follows the action so the shadow frustum stays local
+    let sx = 0, sz = -14;
+    if (p) { sx = p.pos.x; sz = p.pos.z; }
+    else if (state === 'map') { sx = 3; sz = 0; }
     this.sun.position.set(sx + 8, 16, sz - 6);
     this.sun.target.position.set(sx, 0, sz);
   }

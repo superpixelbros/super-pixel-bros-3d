@@ -23,15 +23,22 @@ export const CHARACTERS = {
 };
 export const HERO_IDS = Object.keys(CHARACTERS);
 
+// Capsule size: total height = 2*(HALF+RADIUS) = 1.26m. The renderer must
+// keep the mesh in sync (0.9x of the 1.4m full-size build) — derive from
+// these constants, never hardcode the old 0.7 feet offset again.
+export const HERO_RADIUS = 0.315;
+export const HERO_HALF = 0.315;
+
 const COYOTE = 6;       // frames of forgiveness leaving the ground
 const BUFFER = 7;       // frames of pre-land jump memory
 const JUMP_CUT = 0.45;  // early release: cut rise once to this fraction
 
 export class Player {
+  // heroId: a CHARACTERS key, or a custom def object (used by AI rivals)
   constructor(RAPIER, world, heroId, spawn) {
     this.R = RAPIER;
-    this.def = CHARACTERS[heroId];
-    this.heroId = heroId;
+    this.def = typeof heroId === 'string' ? CHARACTERS[heroId] : heroId;
+    this.heroId = heroId.id || heroId;
     this.spawn = { ...spawn };
     this.autoRun = true;
 
@@ -39,7 +46,7 @@ export class Player {
       .setTranslation(spawn.x, spawn.y, spawn.z);
     this.body = world.createRigidBody(bodyDesc);
     this.collider = world.createCollider(
-      RAPIER.ColliderDesc.capsule(0.35, 0.35), this.body);
+      RAPIER.ColliderDesc.capsule(HERO_HALF, HERO_RADIUS), this.body);
 
     this.ctrl = world.createCharacterController(0.02);
     this.ctrl.enableAutostep(0.42, 0.25, true);
@@ -56,6 +63,8 @@ export class Player {
     this.animT = 0;        // walk-cycle clock
     this.speed2D = 0;
     this.alive = true;
+    this.jumped = false;     // event flags, one-frame pulses for sfx
+    this.landed = false;
   }
 
   get pos() { return this.body.translation(); }
@@ -64,6 +73,8 @@ export class Player {
   step(flags) {
     const dt = STEP;
     const d = this.def;
+    this.jumped = false;
+    this.landed = false;
     if (flags.spin && this.spinT <= 0) this.spinT = 28; // ~0.46s
     if (this.spinT > 0) this.spinT -= 1;
 
@@ -79,6 +90,7 @@ export class Player {
     if (flags.jump) this.buffer = BUFFER;
     else if (this.buffer > 0) this.buffer -= 1;
     if (this.buffer > 0 && (this.grounded || this.coyote > 0)) {
+        this.jumped = true;
       this.vy = d.jump;
       this.grounded = false;
       this.cutArmed = true;
@@ -107,6 +119,8 @@ export class Player {
     const grounded = this.ctrl.computedGrounded();
     if (grounded) {
       this.coyote = COYOTE;
+      // a real thud only: soft landings stay quiet
+      this.landed = !this.grounded && this.vy < -7;
       if (this.vy < 0) this.vy = 0;
     } else if (this.coyote > 0) this.coyote -= 1;
     this.grounded = grounded;

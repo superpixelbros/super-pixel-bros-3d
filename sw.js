@@ -4,7 +4,7 @@
 // (three, rapier) are part of the shell — they only change on re-vendor.
 // Not registered on localhost (see main.js).
 
-const VERSION = 'spb3d-v0.1.0';
+const VERSION = 'spb3d-v0.4.0';
 const CACHE = VERSION + '-shell';
 
 const ASSETS = [
@@ -15,11 +15,13 @@ const ASSETS = [
   './js/main.js',
   './js/game.js',
   './js/hero.js',
-  './js/course.js',
+  './js/levels.js',
+  './js/rivals.js',
   './js/phys.js',
   './js/input.js',
   './js/view.js',
   './js/i18n.js',
+  './js/audio.js',
   './js/renderer.js',
   './js/models.js',
   './js/ui.js',

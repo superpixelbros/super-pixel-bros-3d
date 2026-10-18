@@ -11,6 +11,7 @@ import { TABLES, t } from '../js/i18n.js';
 import Input from '../js/input.js';
 import { initPhysics } from '../js/phys.js';
 import Game from '../js/game.js';
+import { LEVELS } from '../js/levels.js';
 import { HERO_IDS } from '../js/hero.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -59,9 +60,10 @@ ok(!Input.isDown('KeyW'), 'release clears held');
 console.log('game');
 const R = await initPhysics();
 
-function mkGame(id) {
+function mkGame(id, level = 0) {
   const g = new Game(R);
-  g.start(id);
+  g.heroIndex = HERO_IDS.indexOf(id);
+  g.start(level);
   return g;
 }
 
@@ -103,7 +105,7 @@ const g2 = mkGame('bolt');
 g2.player.body.setTranslation({ x: 0, y: 1.2, z: 30 }, true);
 for (let i = 0; i < 3; i++) g2.step({ x: 0, jump: false, jumpHeld: false, spin: false });
 ok(g2.player.spawn.z >= 28, `checkpoint armed (spawn z=${g2.player.spawn.z})`);
-g2.player.body.setTranslation({ x: 0, y: -40, z: 40 }, true);
+g2.player.body.setTranslation({ x: 0, y: -40, z: 30 }, true);
 g2.step({ x: 0, jump: false, jumpHeld: false, spin: false });
 ok(g2.player.pos.y > -5 && g2.deaths === 1, 'falling respawns at checkpoint');
 
@@ -115,28 +117,93 @@ for (let i = 0; i < 120 && g3.state === 'play'; i++) {
 }
 ok(g3.state === 'clear' && g3.clearTime > 0, `finished → clear in ${g3.clearTime?.toFixed?.(1)}s`);
 
-// every hero must actually CLEAR the course's first sections under its own
-// jump envelope: run the gap at z16-19, then hop both steps (0.7m, 1.4m).
-// (seed of the per-hero reachability checker — extend when adding course geometry)
+// every hero must FULLY CLEAR every level under its own jump envelope:
+// a scripted bot auto-runs and jumps inside course.jumpZones with a full
+// hold (slow heroes need full height). This is the reachability gate —
+// extend levels, it follows automatically.
 console.log('roster reachability');
-for (const id of HERO_IDS) {
-  const h = mkGame(id);
-  let hold = 0;
-  for (let i = 0; i < 900 && h.player.pos.z < 36; i++) {
+for (let li = 0; li < LEVELS.length; li++) {
+  for (const id of HERO_IDS) {
+    const h = mkGame(id, li);
+    const zones = h.course.jumpZones;
+    let hold = 0;
+    for (let i = 0; i < 3600 && h.state === 'play'; i++) {
+      const q = h.player.pos;
+      const jump = h.player.grounded &&
+        zones.some(([a, b]) => q.z > a && q.z < b);
+      if (jump) hold = 32;
+      h.step({ x: 0, jump, jumpHeld: hold > 0, spin: false });
+      if (hold > 0) hold--;
+    }
     const q = h.player.pos;
-    const atEdge = (a, b) => q.z > a && q.z < b;
-    const jump = h.player.grounded &&
-      (atEdge(14.6, 15.4) || atEdge(29.3, 30.3) || atEdge(32.3, 33.3));
-    if (jump) hold = 32; // hold to apex — slow heroes need full height
-    h.step({ x: 0, jump, jumpHeld: hold > 0, spin: false });
-    if (hold > 0) hold--;
+    ok(h.state === 'clear' && Number.isFinite(q.x + q.y + q.z),
+      `${LEVELS[li].id}/${id}: cleared t=${(h.timeF / 60).toFixed(1)}s` +
+      ` deaths=${h.deaths} coins=${h.coins}/${h.course.coinTotal}`);
+    h.disposeWorld();
   }
-  const q = h.player.pos;
-  ok(Number.isFinite(q.x + q.y + q.z) && q.z > 36,
-    `${id}: cleared gap + steps, reached z=${q.z.toFixed(1)}`);
-  h.disposeWorld();
 }
 g.disposeWorld(); g2.disposeWorld(); g3.disposeWorld();
+
+// ---- 4) AI rivals race along ----------------------------------------------
+// Rivals run the SAME course on autopilot: they must make real progress,
+// stay finite, finish, and yield a sane hero placement.
+console.log('rivals');
+{
+  const rg = mkGame('rosso', 0);
+  let hold = 0;
+  const zones = rg.course.jumpZones;
+  for (let i = 0; i < 3600 && rg.state === 'play'; i++) {
+    const q = rg.player.pos;
+    const jump = rg.player.grounded &&
+      zones.some(([a, b]) => q.z > a && q.z < b);
+    if (jump) hold = 32;
+    rg.step({ x: 0, jump, jumpHeld: hold > 0, spin: false });
+    if (hold > 0) hold--;
+  }
+  // hero stands at the flag; let the rivals run out their race
+  for (let i = 0; i < 1800; i++) {
+    for (const r of rg.rivals) r.step(rg.course, 3600 + i, 60 + i / 60);
+    rg.world.step();
+  }
+  for (const r of rg.rivals) {
+    const q = r.pos;
+    ok(Number.isFinite(q.x + q.y + q.z) && q.z > 30,
+      `rival ${r.id} raced to z=${q.z.toFixed(1)}` +
+      (r.finished ? ` (finished ${r.finishT.toFixed(1)}s)` : ''));
+  }
+  ok(rg.rivals[0].finished, 'the fastest rival finishes');
+  ok(rg.clearPlace >= 1 && rg.clearPlace <= 4,
+    `hero placement recorded: ${rg.clearPlace}`);
+  rg.disposeWorld();
+}
+
+// ---- 5) adventure map logic -----------------------------------------------
+console.log('adventure map');
+const mg = new Game(R);
+mg.enterMap();
+ok(mg.state === 'map' && mg.map.cursor === 0 && !mg.map.walk,
+  'enterMap: fresh save sits at stage 1');
+mg.mapMove(1);
+ok(mg.map.cursor === 0, 'cursor cannot pass the frontier');
+mg.frontier = 1;
+mg.mapMove(1);
+ok(mg.map.cursor === 1, 'cursor reaches the frontier stage');
+mg.mapMove(-1);
+mg.mapMove(-1);
+ok(mg.map.cursor === 0, 'cursor clamps at stage 1');
+
+mg.levelIndex = 0;
+ok(mg.advanceFrontier() === 'map' && mg.frontier === 1 && mg.map.walk,
+  'clearing the frontier walks the hero onward');
+for (let i = 0; i < 90; i++) mg.mapStep();
+ok(!mg.map.walk, 'the walk tween completes');
+const hp1 = mg.mapHeroPos();
+ok(!hp1.walking && Math.abs(hp1.x - 6) < 0.01,
+  `hero ends up on node 2 (x=${hp1.x.toFixed(1)})`);
+
+mg.levelIndex = 1;
+ok(mg.advanceFrontier() === 'victory', 'clearing the last stage wins the trophy');
+mg.disposeWorld();
 
 // ---- done -----------------------------------------------------------------
 if (fails) {
