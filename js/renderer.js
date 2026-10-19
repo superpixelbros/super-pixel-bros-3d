@@ -211,6 +211,49 @@ export class Renderer {
       return { body: p.body, m };
     });
 
+    // swinging wrecking ball + rope
+    const iron = mat(0x6b6f76), ropeM = mat(0x3a3a3a);
+    this.pendulumMeshes = course.pendulums.map((p) => {
+      const g = new THREE.Group();
+      const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1, 6), ropeM);
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(p.r, 14, 12), iron);
+      ball.castShadow = true;
+      g.add(rope, ball);
+      this.courseGroup.add(g);
+      return { p, g, rope, ball };
+    });
+    // rolling logs
+    const bark = mat(0x8a5a33);
+    this.rollerMeshes = course.rollers.map((r) => {
+      const m = add(new THREE.Mesh(
+        new THREE.CylinderGeometry(r.r, r.r, 1.2, 14).rotateZ(Math.PI / 2), bark),
+      0, r.r, r.z);
+      m.castShadow = true;
+      return { r, m };
+    });
+    // sweeping pistons
+    const steel = mat(0xb0503a);
+    this.pistonMeshes = course.pistons.map((p) => {
+      const m = add(new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, p.hy * 2, 1), steel), 0, p.hy, p.z);
+      m.castShadow = true;
+      return { p, m };
+    });
+    // crumble slabs (cracked stone look via darker top)
+    this.crumbleMeshes = course.crumbles.map((c) => {
+      const m = add(new THREE.Mesh(
+        new THREE.BoxGeometry(c.x1 - c.x0, 2, c.z1 - c.z0), mat(0x9a8f7a)),
+      0, c.top - 1, (c.z0 + c.z1) / 2);
+      m.receiveShadow = true;
+      return { c, m };
+    });
+    // bounce pads
+    const spring = mat(0x37d17a);
+    for (const b of course.bounces) {
+      add(new THREE.Mesh(new THREE.CylinderGeometry(b.r, b.r, 0.24, 16), spring),
+        b.x, 0.12, b.z);
+    }
+
     // finish pad + flagpole
     add(new THREE.Mesh(new THREE.BoxGeometry(9, 0.16, 2.4), mat(0xf4f1e8)),
       0, 0.08, course.finishZ + 1);
@@ -288,6 +331,29 @@ export class Renderer {
       for (const pm of this.pillarMeshes) {
         pm.m.position.y = pm.body.translation().y;
       }
+      for (const { p, g, rope, ball } of this.pendulumMeshes) {
+        const t = p.body.translation();
+        ball.position.set(t.x, t.y, p.z);
+        // rope spans pivot → ball
+        const dx = t.x, dy = p.pivY - t.y;
+        const len = Math.hypot(dx, dy) || 0.01;
+        rope.scale.y = len;
+        rope.position.set(t.x / 2, (t.y + p.pivY) / 2, p.z);
+        rope.rotation.z = -Math.atan2(dx, dy);
+      }
+      for (const { r, m } of this.rollerMeshes) {
+        const t = r.body.translation();
+        m.position.x = t.x;
+        m.rotation.x = t.x / r.r;           // roll with travel (axis = X)
+      }
+      for (const { p, m } of this.pistonMeshes) {
+        m.position.x = p.body.translation().x;
+      }
+      for (const { c, m } of this.crumbleMeshes) {
+        m.position.y = c.gone
+          ? c.top - 1 - c.fallT * c.fallT * 0.0018          // tumble away
+          : c.top - 1 + (c.timer > 0 ? Math.sin(c.timer * 1.2) * 0.03 : 0);
+      }
     }
 
     // which world we're looking at
@@ -312,7 +378,7 @@ export class Renderer {
 
     // rivals race only inside the course world
     this.rivalGroup.visible = (state === 'play' || state === 'pause'
-      || state === 'clear') && this.rivalParts.length > 0;
+      || state === 'clear' || state === 'dq') && this.rivalParts.length > 0;
     if (this.rivalGroup.visible) {
       for (let i = 0; i < game.rivals.length; i++) {
         const p = game.rivals[i].player;

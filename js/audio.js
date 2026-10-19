@@ -165,8 +165,13 @@ class AudioEngine {
       case 'spin':    this._slide(500, 1400, 0.18, 'sawtooth', 0.05); break;
       case 'coin':    this._seq(['E5', 'B5'], 0.07, 'square', 0.09); break;
       case 'checkpoint': this._seq(['C5', 'E5', 'G5'], 0.08, 'square', 0.09); break;
+      case 'hit':     this._noise(0.1, 0.16); this._slide(220, 70, 0.18, 'square', 0.11); break;
+      case 'die':     this._seq(['B4','F4','D4','G3','C3'], 0.13, 'square', 0.1); break;
+      case 'bounce':  this._slide(240, 900, 0.2, 'square', 0.1); break;
       case 'fall':    this._slide(500, 90, 0.5, 'square', 0.09); break;
       case 'clear':   this._seq(['C5','E5','G5','C6','G5','C6'], 0.12, 'square', 0.1); break;
+      case 'tick':    this._tone('A5', this.ctx.currentTime, 0.05, 'square', 0.09); break;
+      case 'gameover':this._seq(['A4','F4','D4','A3'], 0.22, 'triangle', 0.12); break;
       case 'trophy':  this._seq(['C5','E5','G5','C6','E6','G6','C6','E6','G6'], 0.11, 'square', 0.1); break;
       case 'select':  this._seq(['E5'], 0.07, 'square', 0.08); break;
       case 'confirm': this._seq(['C5', 'G5'], 0.08, 'square', 0.09); break;

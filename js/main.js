@@ -131,6 +131,9 @@ async function boot() {
       if (Input.pressed('KeyQ')) toTitle();
     } else if (s === 'clear') {
       if (Input.pressed('Enter')) handleDone();
+    } else if (s === 'dq') {
+      if (Input.pressed('Enter')) startLevel(game.levelIndex);
+      if (Input.pressed('KeyQ')) toTitle();
     } else if (s === 'victory') {
       if (Input.pressed('Enter')) toTitle();
     }
@@ -169,13 +172,14 @@ async function boot() {
     }
     if (game.state === 'play' && game.player) {
       ui.hud(game.coins, game.course.coinTotal, game.timeF / 60,
-        placement(game));
+        placement(game), game.player.hp, game.player.maxHp, game.timeLimit);
     }
     if (game.state === 'clear') {
       ui.show('clear');
       ui.clearStats(game.clearTime, game.coins, game.course.coinTotal,
         !game.isLastStage(), game.clearPlace);
     }
+    if (game.state === 'dq') ui.show('dq');
 
     renderer.sync(game, game.state);
     renderer.render();

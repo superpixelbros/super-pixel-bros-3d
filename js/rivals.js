@@ -7,27 +7,29 @@
 // recorded flag streams could replay a race later.
 
 import { Player, CHARACTERS } from './hero.js';
+import { windAt, hazardTouch } from './levels.js';
 
-// Speeds sit between the heroes' range so every hero can win with a clean
-// run; jump stats stay in the proven-clearable envelope.
+// Rival speed is a RATIO of the player's chosen hero (plus their own jump
+// copy) — every race is close no matter who you pick; personality comes
+// from lane, wander and jump-timing offsets.
 export const RIVAL_DEFS = [
   { id: 'dune', color: 0x8a4fd9, style: 'cap',
-    speed: 7.6, jump: 10.9, lane: -1.5, jitter: 0.9 },
+    speedMul: 1.10, lane: -1.5, jitter: 0.9 },
   { id: 'zara', color: 0xf07f2f, style: 'keffiyeh',
-    speed: 6.3, jump: 11.4, lane: 1.5, jitter: 0.6 },
+    speedMul: 0.98, lane: 1.5, jitter: 0.6 },
   { id: 'komo', color: 0x2fb3a6, style: 'fletch',
-    speed: 5.6, jump: 10.4, lane: 2.4, jitter: 1.3 },
+    speedMul: 0.87, lane: 2.4, jitter: 1.3 },
 ];
 
 const LANE_CLAMP = 2.3;   // never hug the edge of a narrow ledge
 
 export class Rival {
-  constructor(R, world, rd, spawn, idx) {
+  constructor(R, world, rd, spawn, idx, heroDef) {
     this.rd = rd;
     this.id = rd.id;
     const def = {
-      speed: rd.speed, accel: 40, friction: 55, jump: rd.jump,
-      hp: 99, color: rd.color, style: rd.style,
+      speed: heroDef.speed * rd.speedMul, accel: 40, friction: 55,
+      jump: heroDef.jump, hp: 99, color: rd.color, style: rd.style,
     };
     this.player = new Player(R, world, def,
       { x: rd.lane, y: spawn.y, z: spawn.z });
@@ -41,7 +43,7 @@ export class Rival {
 
   get pos() { return this.player.pos; }
 
-  step(course, frame, timeSec) {
+  step(course, frame, timeSec, live = true) {
     const p = this.player;
     if (this.finished) return;
     const q = p.pos;
@@ -73,8 +75,14 @@ export class Rival {
       }
     } else this.blockT = 0;
 
-    p.step({ x, jump, jumpHeld: this.hold > 0, spin: false });
+    p.step({ x, jump, jumpHeld: this.hold > 0, spin: false,
+      windX: live ? windAt(course, q) : 0 });
     if (this.hold > 0) this.hold--;
+    // hazards knock rivals too (hp 99 → they stumble but never die): chaos
+    if (live) {
+      const k = hazardTouch(course, q);
+      if (k) p.hurt(k.kx, k.kz);
+    }
 
     // checkpoint respawn, same rules as the hero
     for (const cp of course.checkpoints) {
@@ -92,8 +100,9 @@ export class Rival {
   }
 }
 
-export function makeRivals(R, world, course) {
-  return RIVAL_DEFS.map((rd, i) => new Rival(R, world, rd, course.spawn, i));
+export function makeRivals(R, world, course, heroDef) {
+  return RIVAL_DEFS.map((rd, i) =>
+    new Rival(R, world, rd, course.spawn, i, heroDef));
 }
 
 // 1..N — how many racers are strictly ahead of the hero right now

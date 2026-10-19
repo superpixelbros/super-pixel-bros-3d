@@ -47,6 +47,7 @@ export class UI {
       <div class="hud hidden" id="sc-hud">
         <div class="hud-box" id="hud-coins"></div>
         <div class="hud-box" id="hud-place"></div>
+        <div class="hud-box" id="hud-hearts"></div>
         <div class="hud-box" id="hud-time"></div>
       </div>
 
@@ -64,13 +65,26 @@ export class UI {
 
       <div class="screen hidden" id="sc-clear">
         <div class="panel card">
-          <div class="trophy">🏆</div>
+          <div class="trophy" id="clear-trophy">🏆</div>
           <h2 data-key="clear.title"></h2>
           <p class="trophy-sub" data-key="clear.trophy"></p>
           <p class="result" id="clear-time"></p>
           <p class="result" id="clear-coins"></p>
           <p class="result" id="clear-place"></p>
           <button class="btn big accent" id="b-done" data-key="clear.hint"></button>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="sc-dq">
+        <div class="panel card dq">
+          <div class="dq-mark">⏱</div>
+          <h2 data-key="dq.title"></h2>
+          <p class="blurb" data-key="dq.sub"></p>
+          <div class="col">
+            <button class="btn big accent" id="b-dq-retry" data-key="dq.retry"></button>
+            <button class="btn ghost" id="b-dq-title" data-key="pause.quit"></button>
+          </div>
+          <p class="keys dim" data-key="dq.hint"></p>
         </div>
       </div>
 
@@ -90,7 +104,7 @@ export class UI {
 
       <div class="screen hidden" id="sc-victory">
         <div class="panel card">
-          <div class="trophy">🏆</div>
+          <div class="trophy gold">🏆</div>
           <h2 data-key="victory.title"></h2>
           <p class="trophy-sub" data-key="victory.sub"></p>
           <button class="btn big accent" id="b-victory" data-key="victory.hint"></button>
@@ -107,6 +121,8 @@ export class UI {
     this.bind('b-retry', () => this.cb.onRetry());
     this.bind('b-title', () => this.cb.onTitle());
     this.bind('b-done', () => this.cb.onDone());
+    this.bind('b-dq-retry', () => this.cb.onRetry());
+    this.bind('b-dq-title', () => this.cb.onTitle());
     this.bind('b-victory', () => this.cb.onTitle());
     this.bind('b-map-prev', () => this.cb.onMapMove(-1));
     this.bind('b-map-next', () => this.cb.onMapMove(1));
@@ -130,12 +146,12 @@ export class UI {
   show(name) {
     const map = {
       title: ['sc-title'], select: ['sc-select'], play: ['sc-hud'],
-      pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'], map: ['sc-map'],
-      victory: ['sc-victory'],
+      pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'], dq: ['sc-dq'],
+      map: ['sc-map'], victory: ['sc-victory'],
     };
     const ids = new Set(map[name] || []);
     for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear',
-      'sc-map', 'sc-victory']) {
+      'sc-dq', 'sc-map', 'sc-victory']) {
       this.root.querySelector('#' + id).classList.toggle('hidden', !ids.has(id));
     }
   }
@@ -148,18 +164,32 @@ export class UI {
     this.root.querySelector('#hero-blurb').textContent = t(`hero.${id}.blurb`);
     const d = CHARACTERS[id];
     this.root.querySelector('#bar-spd').style.width =
-      Math.round((d.speed / 10.6) * 100) + '%';
+      Math.round((d.speed / 8.4) * 100) + '%';
     this.root.querySelector('#bar-jmp').style.width =
-      Math.round((d.jump / 13.0) * 100) + '%';
+      Math.round((d.jump / 12.6) * 100) + '%';
   }
 
-  hud(coins, coinTotal, timeSec, place) {
+  hud(coins, coinTotal, timeSec, place, hp = 1, maxHp = 1, limit = 0) {
     this.root.querySelector('#hud-coins').textContent =
       t('hud.coins', { n: coins + ' / ' + coinTotal });
-    this.root.querySelector('#hud-time').textContent =
-      t('hud.time', { t: fmtTime(timeSec) });
+    const timeEl = this.root.querySelector('#hud-time');
+    // countdown to the disqualification clock (elapsed if no limit set)
+    timeEl.textContent = t('hud.time',
+      { t: fmtTime(limit > 0 ? Math.max(0, limit - timeSec) : timeSec) });
+    if (limit > 0) {
+      const rem = limit - timeSec;
+      timeEl.classList.toggle('warn', rem <= limit * 0.25 && rem > limit * 0.1);
+      timeEl.classList.toggle('crit', rem <= limit * 0.1);
+    }
     this.root.querySelector('#hud-place').textContent =
       t('hud.place', { p: place, m: FIELD_SIZE });
+    // hearts: filled/empty pips; hidden entirely for 1-heart heroes so a
+    // Bolt run isn't spammed with a lone heart
+    const hearts = this.root.querySelector('#hud-hearts');
+    if (maxHp > 1) {
+      hearts.textContent = '♥'.repeat(hp) + '♡'.repeat(Math.max(0, maxHp - hp));
+      hearts.style.visibility = 'visible';
+    } else hearts.style.visibility = 'hidden';
   }
 
   clearStats(timeSec, coins, coinTotal, hasNext, place) {
@@ -169,6 +199,9 @@ export class UI {
       t('clear.coins', { n: coins, m: coinTotal });
     this.root.querySelector('#clear-place').textContent =
       t('clear.place', { p: place, m: FIELD_SIZE });
+    // beat the whole rival field → the trophy gleams gold
+    this.root.querySelector('#clear-trophy').classList.toggle('gold',
+      place === 1);
     // frontier stage continues to the map; the last one ends the game
     const b = this.root.querySelector('#b-done');
     b.dataset.key = hasNext ? 'clear.hint_next' : 'clear.hint';

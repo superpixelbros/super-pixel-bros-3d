@@ -7,8 +7,8 @@
 // the renderer's job.
 
 import { createWorld } from './phys.js';
-import { Player, HERO_IDS } from './hero.js';
-import { LEVELS, courseStep } from './levels.js';
+import { Player, HERO_IDS, CHARACTERS } from './hero.js';
+import { LEVELS, courseStep, hazardTouch, windAt } from './levels.js';
 import { makeRivals, placement } from './rivals.js';
 
 export default class Game {
@@ -23,6 +23,7 @@ export default class Game {
     this.levelIndex = 0;
     this.map = { cursor: 0, walk: null }; // walk: {from, to, t 0..1}
     this.sfx = () => {};                 // main.js injects the audio hook
+    this.hazardsOff = false;             // geometry-only bots (headless)
   }
 
   selectedHero() { return HERO_IDS[this.heroIndex]; }
@@ -85,28 +86,58 @@ export default class Game {
     this.course = LEVELS[levelIndex].build(this.R, this.world);
     this.player = new Player(this.R, this.world, this.selectedHero(),
       this.course.spawn);
-    this.rivals = makeRivals(this.R, this.world, this.course);
+    this.rivals = makeRivals(this.R, this.world, this.course,
+      CHARACTERS[this.selectedHero()]);
     this.frame = 0;
     this.timeF = 0;
     this.coins = 0;
     this.deaths = 0;
+    this.timeLimit = LEVELS[levelIndex].timeLimit;
+    this.tickAt = 0;
     this.bestSpawn = { ...this.course.spawn };
     this.state = 'play';
   }
 
   step(flags) {
     if (this.state !== 'play' || !this.player) return;
+    const P = this.player;
     this.frame++;
     this.timeF++;
-    courseStep(this.R, this.course, this.frame);
+    courseStep(this.R, this.course, this.frame, this.hazardsOff ? null : P);
+    // drop given-way crumble slabs out of the physics world (safe between
+    // steps; the mesh keeps falling visually via fallT)
+    for (const c of this.course.crumbles) {
+      if (c.gone && !c.removed) { c.removed = true; this.world.removeRigidBody(c.body); }
+    }
+
+    if (!this.hazardsOff) flags = { ...flags, windX: windAt(this.course, P.pos) };
     if (flags.spin) this.sfx('spin');
-    this.player.step(flags);
-    if (this.player.jumped) this.sfx('jump');
-    if (this.player.landed) this.sfx('land');
-    for (const r of this.rivals) r.step(this.course, this.frame, this.timeF / 60);
+    P.step(flags);
+    if (P.jumped) this.sfx('jump');
+    if (P.landed) this.sfx('land');
+    for (const r of this.rivals) {
+      r.step(this.course, this.frame, this.timeF / 60, !this.hazardsOff);
+    }
     this.world.step();
 
-    const p = this.player.pos;
+    const p = P.pos;
+    if (!this.hazardsOff) {
+      // bounce pads launch on contact (before damage so you don't eat a hit
+      // the same frame you got a lift)
+      for (const b of this.course.bounces) {
+        if (P.vy <= 0.1 && p.y < 1.5 &&
+          Math.hypot(p.x - b.x, p.z - b.z) < b.r) {
+          P.bounce(b.up); this.sfx('bounce');
+        }
+      }
+      // damaging hazards → hearts + knockback; a lethal hit respawns
+      const k = hazardTouch(this.course, p);
+      if (k) {
+        const res = P.hurt(k.kx, k.kz);
+        if (res === 'hit') this.sfx('hit');
+        else if (res === 'dead') { this.sfx('die'); P.respawn(); this.deaths++; }
+      }
+    }
     // coins: simple proximity to the capsule center
     for (const c of this.course.coins) {
       if (c.taken) continue;
@@ -129,12 +160,22 @@ export default class Game {
       this.sfx('fall');
       this.player.respawn();
     }
-    // flag
+    // flag wins before the clock
     if (p.z >= this.course.finishZ) {
       this.clearTime = this.timeF / 60;
       this.clearPlace = placement(this);
       this.state = 'clear';
       this.sfx('clear');
+      return;
+    }
+    // the clock: ticking under 5s, disqualification at zero
+    const rem = this.timeLimit - this.timeF / 60;
+    if (rem <= 0) {
+      this.state = 'dq';
+      this.sfx('gameover');
+    } else if (rem <= 5 && this.timeF >= this.tickAt) {
+      this.tickAt = this.timeF + 60;
+      this.sfx('tick');
     }
   }
 

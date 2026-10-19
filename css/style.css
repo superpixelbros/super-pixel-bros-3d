@@ -126,6 +126,18 @@ html, body {
 #hud-coins { left: calc(14px + env(safe-area-inset-left)); color: var(--gold); }
 #hud-time { right: calc(14px + env(safe-area-inset-right)); }
 #hud-place { left: 50%; transform: translateX(-50%); color: var(--gold); }
+#hud-hearts {
+  left: calc(14px + env(safe-area-inset-left));
+  top: auto; bottom: calc(14px + env(safe-area-inset-bottom));
+  color: #ff5a5f; font-size: 20px; letter-spacing: 0.1em;
+}
+#hud-time.warn { color: var(--gold); }
+#hud-time.crit { color: #ff5a5f; animation: pulse 0.5s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+#sc-dq { align-items: center; justify-content: center; }
+.dq-mark { font-size: 54px; margin-bottom: 6px; }
+.dq h2 { color: #ff5a5f; }
+.trophy.gold { text-shadow: 0 0 18px var(--gold), 0 0 42px var(--gold); }
 
 /* ---- pause / clear cards ---- */
 #sc-pause, #sc-clear, #sc-victory { align-items: center; justify-content: center; }
