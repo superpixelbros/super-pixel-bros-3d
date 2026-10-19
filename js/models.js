@@ -59,6 +59,12 @@ export function buildHero(def) {
     const f3 = box(0.05, 0.28, 0.06, WHITE, -0.08, 1.54, -0.1);
     g.add(f1, f2, f3);
     g.add(box(0.14, 0.36, 0.1, 0x7a5230, 0, 0.96, -0.24));  // quiver
+  } else if (def.style === 'crown') {
+    g.add(box(0.44, 0.14, 0.4, def.color, 0, 1.42, 0));      // gold band
+    g.add(box(0.1, 0.14, 0.1, def.color, -0.16, 1.55, 0));   // points
+    g.add(box(0.1, 0.2, 0.1, def.color, 0, 1.58, 0));
+    g.add(box(0.1, 0.14, 0.1, def.color, 0.16, 1.55, 0));
+    g.add(box(0.08, 0.08, 0.08, 0xe04a3f, 0, 1.46, 0.19));   // ruby jewel
   }
 
   return { group: g, legL, legR, armL, armR, head };

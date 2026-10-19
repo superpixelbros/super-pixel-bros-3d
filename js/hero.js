@@ -25,6 +25,14 @@ export const CHARACTERS = {
     color: 0xd8d4c8, style: 'keffiyeh' },
   sahm:  { speed: 8.4, accel: 72, friction: 10, jump: 8.6, hp: 1,
     color: 0x58b060, style: 'fletch' }, // brake-slip stays — overshoot king
+  dolar: { speed: 7.4, accel: 46, friction: 55, jump: 10.6, hp: 2,
+    color: 0xb8c4d0, style: 'cap' },    // silver hustler — quick, level head
+  hero:  { speed: 7.0, accel: 44, friction: 58, jump: 11.2, hp: 2,
+    color: 0x5560dd, style: 'cap' },    // indigo everyman — does the job
+  scoozy:{ speed: 8.3, accel: 68, friction: 12, jump: 9.4, hp: 1, steer: 1.1,
+    color: 0xe0559a, style: 'fletch' }, // on wheels: darty, sharp, slippery
+  glorious: { speed: 6.7, accel: 38, friction: 66, jump: 10.8, hp: 3,
+    steer: 1.1, color: 0xf0b428, style: 'crown' }, // gold tank — dies loudly
 };
 export const HERO_IDS = Object.keys(CHARACTERS);
 
