@@ -132,6 +132,7 @@ for (let li = 0; li < LEVELS.length; li++) {
     const h = mkGame(id, li);
     h.hazardsOff = true;   // geometry + pace probe: timed hazards are the
                            // human problem, the bot proves the platforming
+    h.gatesOff = true;     // placement gates need human racing, not a bot
     const zones = h.course.jumpZones;
     let hold = 0;
     for (let i = 0; i < 3600 && h.state === 'play'; i++) {
@@ -278,6 +279,49 @@ console.log('clock + disqualification');
   dg.disposeWorld();
 }
 
+// ---- 6b) placement gates ---------------------------------------------------
+// Shore advances on top-3 (4th loses); Ridge demands 1st. We park rivals at
+// chosen z's around the flag to force a finishing place and check the outcome.
+console.log('placement gates');
+{
+  // finish with exactly `ahead` rivals beating us, hero otherwise clean
+  const gateRun = (level, ahead) => {
+    const gg = mkGame('rosso', level);
+    gg.hazardsOff = true;
+    const fz = gg.course.finishZ;
+    gg.player.body.setTranslation({ x: 0, y: 1.2, z: fz - 1.4 }, true);
+    gg.player.vz = 7;
+    gg.rivals.forEach((r, i) => {
+      const win = i < ahead;                 // these finish just ahead
+      const xs = [-3.5, -2.6, 3.5];          // never stacked, off the lane
+      r.player.body.setTranslation(
+        { x: xs[i], y: 1.2, z: win ? fz - 0.2 : 1 }, true);
+      r.player.vz = win ? 7 : 0;
+      r.player.autoRun = win;                // losers simply stop at the line
+    });
+    for (let i = 0; i < 90 && gg.state === 'play'; i++) {
+      gg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+    }
+    return gg;
+  };
+  const g1 = gateRun(0, 3);   // shore, 3 rivals ahead → we are 4th
+  ok(g1.state === 'lost' && g1.clearPlace === 4,
+    `shore 4th place → LOST (place=${g1.clearPlace})`);
+  g1.disposeWorld();
+  const g2 = gateRun(0, 2);   // shore, 2 ahead → 3rd → passes (top 3)
+  ok(g2.state === 'clear' && g2.clearPlace === 3,
+    `shore 3rd place → clear (place=${g2.clearPlace})`);
+  g2.disposeWorld();
+  const g3 = gateRun(1, 1);   // ridge, 1 ahead → 2nd → must-win means LOST
+  ok(g3.state === 'lost' && g3.clearPlace === 2,
+    `ridge 2nd place → LOST (must win, place=${g3.clearPlace})`);
+  g3.disposeWorld();
+  const g4 = gateRun(1, 0);   // ridge, clean win → clear
+  ok(g4.state === 'clear' && g4.clearPlace === 1,
+    `ridge 1st place → clear (place=${g4.clearPlace})`);
+  g4.disposeWorld();
+}
+
 // ---- 7) AI rivals race along ----------------------------------------------
 // Rivals run the SAME course on autopilot: they must make real progress,
 // stay finite, finish, and yield a sane hero placement.
@@ -327,6 +371,14 @@ ok(mg.map.cursor === 1, 'cursor reaches the frontier stage');
 mg.mapMove(-1);
 mg.mapMove(-1);
 ok(mg.map.cursor === 0, 'cursor clamps at stage 1');
+// requirement: a fresh run from the title always opens on stage 1 even when
+// stage 2 is unlocked; mid-run map entries (after a clear) keep the frontier
+mg.enterMap(true);
+ok(mg.map.cursor === 0 && mg.frontier === 1,
+  'fresh run opens the map on stage 1 (unlocks kept)');
+mg.enterMap(false);
+ok(mg.map.cursor === 1, 'mid-run map entry lands on the frontier');
+mg.mapMove(-1);
 
 mg.levelIndex = 0;
 ok(mg.advanceFrontier() === 'map' && mg.frontier === 1 && mg.map.walk,

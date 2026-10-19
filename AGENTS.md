@@ -44,21 +44,24 @@ node tools/headless.mjs
 edge-trigger contract, full Rapier-physics runs (auto-run, jump arc, coins,
 checkpoints, fall-respawn, finish), **per-hero × per-level full clears** —
 every hero must CLEAR every level death-free via a bot that jumps inside
-`course.jumpZones` (bots run with `game.hazardsOff = true`: they prove
-platforming GEOMETRY and pace, not hazard timing), a roster fair band
+`course.jumpZones` (bots run with `game.hazardsOff` + `game.gatesOff`:
+they prove platforming GEOMETRY and pace, not hazard timing or race
+results), a roster fair band
 (slowest ≤ 1.40× fastest clear time), scenery solidity, the damage model
 (`hurt()` hearts/invuln/knockback + live pendulum hit + crumble→fall→
 respawn), time-limit calibration (limit ≥ 1.6× slowest bot) + DQ + retry
-reset, a rivals race check (autopilot must progress + finish), and the
-adventure-map logic. Run it after ANY edit to `levels.js`, `hero.js`,
-`game.js` or `rivals.js`.
+reset, a rivals race check (autopilot must progress + finish),
+**placement-gate outcomes** (forced finishing places: shore 4th → LOST,
+3rd → clear; ridge must win), and the adventure-map logic (incl.
+fresh-run cursor = stage 1 with unlocks kept). Run it after ANY edit to
+`levels.js`, `hero.js`, `game.js` or `rivals.js`.
 
 ## Architecture
 
 | File | Responsibility |
 |---|---|
 | `js/main.js` | boot, state routing (`title/select/map/play/pause/clear/victory`), fixed 60 Hz loop, key routing, progress persistence, resize, SW registration (never on localhost) |
-| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic; coin/checkpoint/respawn/finish/placement rules; time-limit DQ (`state === 'dq'`, tick sfx); applies hazards/wind/bounce to the hero (and crumble removal); `hazardsOff` flag for geometry-only bots; `sfx()` no-op hook injected by main. **No DOM, no three** |
+| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic; coin/checkpoint/respawn/finish/placement rules; time-limit DQ (`state === 'dq'`, tick sfx) and placement gates (`passPlace` → `state === 'lost'`); applies hazards/wind/bounce to the hero (and crumble removal); `hazardsOff`/`gatesOff` flags for geometry-only bots; `sfx()` no-op hook injected by main. **No DOM, no three** |
 | `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags, damage model (`hurt()` → hearts, `stun` lockout, knockback, 1.2s invuln, `dead` at 0; `respawn()` = full heal + 0.5s grace; falls are always instant deaths). `speed`/`jump`/`hp`/`steer`/`airCtrl`/`floaty` define each hero. `HERO_RADIUS`/`HERO_HALF` are the size source of truth. **No three** |
 | `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme, timeLimit}]` + shared kit: ground/step/coin/**decor** (solid trunks & rocks, always ≥1m off-lane), hazards: hammer (physical turnstile), pendulum/roller/piston (**knockback sensors — no collider**), crumble (fixed slab removed on give-way), bounce pad + wind zones (pure zones); `courseStep()` animates them + crumble timers, `hazardTouch()` returns a knock vector, `windAt()` lateral push. Sunny Shore (gentle: 1 pendulum, bonus bounce, hammer) → Sunset Ridge (roller, hammers, crosswind ledge, piston, crumble crossing, pillars). **No three** |
 | `js/rivals.js` | 3 autopiloted `Player` instances (speed = chosen hero's speed × {1.10, 0.98, 0.87} + their own jump copy, lanes, jitter, vault-if-blocked, checkpoint respawn); `placement()` for the HUD. Solid kinematic capsules — shoving works; they eat hazard knockback too (hp 99 = stumble, never die). Netcode seam: inputs → determinate sim. **No three** |
@@ -66,7 +69,7 @@ adventure-map logic. Run it after ANY edit to `levels.js`, `hero.js`,
 | `js/phys.js` | Rapier init + world factory; `STEP = 1/60` |
 | `js/renderer.js` | three.js scene: lights/shadows/fog/sea, per-level THEMES applied by `buildCourse`, course meshes, hero rig, rival meshes (`setRivals`), map diorama, follow/menu/map cameras |
 | `js/models.js` | procedural hero builder (boxes), `style` variants cap/keffiyeh/fletch |
-| `js/ui.js` | DOM screens (title/select/HUD+place+hearts+countdown/pause/clear/**dq**/map/victory) with `data-key` re-render on language change; timer turns gold <25% and pulses red <10% of the limit; 1st place makes the clear trophy glow gold |
+| `js/ui.js` | DOM screens (title/select/HUD+place+hearts+countdown/pause/clear/**dq**/**lost**/map/victory) with `data-key` re-render on language change; timer turns gold <25% and pulses red <10% of the limit; 1st place makes the clear trophy glow gold |
 | `js/i18n.js` | en/ar tables, `t()`, `L` toggle, `<html lang/dir>`; `pixelbros3d_lang` |
 | `js/input.js` | keyboard + virtual keys, edge triggers, `endFrame()` — ported 1:1 from 2D |
 | `js/view.js` | viewport metrics: dpr cap 2, portrait/coarse flags |
@@ -148,13 +151,17 @@ behind `typeof`), so they run under plain Node for headless checks.
   has brake-slip + 1 heart, Faris trades speed for 3 hearts + sharp
   cuts). Race fairness comes from RIVALS SCALING to your pick
   (`speedMul` ratios), not from identical stats.
-- **Ways to lose**: the stage **time limit** is the only fail state —
-  running out flips `game.state = 'dq'` → DISQUALIFIED card (ENTER
-  retry resets clock+hearts, Q to title). Hearts are the damage buffer:
-  a hazard costs one heart + knockback; at zero hearts *or* any fall the
-  hero dies, respawns at the last checkpoint fully healed, and the lost
-  seconds are the punishment. Limits are generous: headless asserts
-  `timeLimit ≥ 1.6× slowest bot clear` (Shore 45s, Ridge 70s).
+- **Ways to lose**: three terminal states — **time limit** (out of
+  time → `dq` → DISQUALIFIED card), **placement gate** (`lost` card):
+  every `LEVELS` entry has `passPlace`, the worst place that still
+  advances — Shore top-3 of 4, Ridge **must win**. Finish worse →
+  `state='lost'`, card shows place + the broken rule, ENTER retries the
+  stage (clock+hearts reset), Q main menu; the frontier only advances
+  through gates, so the trophy is truly a 1st-place trophy. Falls stay
+  time punishments. Bots skip both race rules via
+  `game.gatesOff` (+ `hazardsOff`) — geometry tests ≠ race tests.
+  Limits stay generous: headless asserts `timeLimit ≥ 1.6× slowest bot
+  clear` (Shore 45s, Ridge 70s).
 - **Hazard placement law**: hazards must always have a safe moment (they
   oscillate) and never require stopping inside a hazard; place knockback
   hazards on wide ground/shoulders, never where a hit drops you into an
@@ -185,7 +192,18 @@ behind `typeof`), so they run under plain Node for headless checks.
   feet offset derives from `HERO_HALF + HERO_RADIUS`, never hardcoded.
 - **Adventure flow**: title → select → map (3D diorama, two islands, hero
   walks node-to-node, ◀ ▶ replay cleared stages) → run → clear → map →
-  … → victory card. Frontier persists via `pixelbros3d_progress`.
+  … → victory card. Frontier persists via `pixelbros3d_progress`
+  (unlocks survive a quit) but **a fresh run always opens the map on
+  stage 1** (`enterMap(true)` from the select screen) — the player then
+  roams freely up to the frontier.
+- **Roster (9 heroes)**: the originals plus Dolar (7.4/10.6/2♥, silver
+  hustler), Hero (7.0/11.2/2♥, indigo everyman), Scoozy (8.3/9.4/1♥,
+  magenta, low-friction "on wheels") and Glorious (6.7/10.8/3♥, gold
+  tank with the `crown` style). Adding a hero = one `CHARACTERS` entry
+  + name/blurb in **both** i18n tables — select carousel, stat bars,
+  rival speed-scaling and diorama colors all pick it up; keep the stat
+  inside the fairness envelope (speed 6.6–8.4, jump 8.6–12.6, hp 1–3)
+  or the fair-band test will say so.
 - Controls: `L` language, `M` mute, `ESC` pause, `R` retry, `Q` title.
   Audio unlocks on first gesture; music ducks while paused.
 - UI text goes through `t('key')` with entries in **both** en and ar
