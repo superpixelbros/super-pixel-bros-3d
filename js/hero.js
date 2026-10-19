@@ -8,18 +8,23 @@
 
 import { STEP } from './phys.js';
 
-// speed m/s, accel m/s², jump launch m/s (gravity 26 ⇒ apex ≈ v²/52)
+// speed m/s, accel m/s², jump launch m/s (gravity 26 ⇒ apex ≈ v²/52),
+// hp = hearts, steer = ground steering authority, airCtrl = share of the
+// lateral accel kept in air. Balance law (headless-enforced): clear-time
+// spread across the roster stays ≤ 1.30× — every distinction has a cost.
 export const CHARACTERS = {
-  rosso: { speed: 6.4, accel: 42, friction: 55, jump: 10.8, hp: 2,
+  rosso: { speed: 7.0, accel: 42, friction: 55, jump: 10.8, hp: 2,
     color: 0xe04a3f, style: 'cap' },
-  bolt:  { speed: 8.8, accel: 56, friction: 50, jump: 10.4, hp: 1,
+  bolt:  { speed: 8.2, accel: 56, friction: 50, jump: 10.2, hp: 1,
+    airCtrl: 0.75,                     // speed demon understeers in air
     color: 0xf2c23e, style: 'cap' },
-  aqua:  { speed: 6.8, accel: 44, friction: 52, jump: 13.0, hp: 1,
-    color: 0x3f9be0, style: 'cap', floaty: true },
-  faris: { speed: 4.8, accel: 30, friction: 70, jump: 10.2, hp: 3,
+  aqua:  { speed: 6.8, accel: 44, friction: 52, jump: 12.6, hp: 1, floaty: true,
+    color: 0x3f9be0, style: 'cap' },
+  faris: { speed: 6.6, accel: 40, friction: 70, jump: 10.2, hp: 3,
+    steer: 1.2,                        // tank with the sharpest cuts
     color: 0xd8d4c8, style: 'keffiyeh' },
-  sahm:  { speed: 10.6, accel: 72, friction: 10, jump: 8.4, hp: 1,
-    color: 0x58b060, style: 'fletch' },
+  sahm:  { speed: 8.4, accel: 72, friction: 10, jump: 8.6, hp: 1,
+    color: 0x58b060, style: 'fletch' }, // brake-slip stays — overshoot king
 };
 export const HERO_IDS = Object.keys(CHARACTERS);
 
@@ -32,6 +37,8 @@ export const HERO_HALF = 0.315;
 const COYOTE = 6;       // frames of forgiveness leaving the ground
 const BUFFER = 7;       // frames of pre-land jump memory
 const JUMP_CUT = 0.45;  // early release: cut rise once to this fraction
+const HURT_INVULN = 72; // ~1.2s of mercy after taking a hit
+const HURT_STUN = 16;   // ~0.27s knockback tumble before control returns
 
 export class Player {
   // heroId: a CHARACTERS key, or a custom def object (used by AI rivals)
@@ -65,7 +72,28 @@ export class Player {
     this.alive = true;
     this.jumped = false;     // event flags, one-frame pulses for sfx
     this.landed = false;
+    // damage model — hearts drive the "ways to lose"
+    this.maxHp = this.def.hp ?? 1;
+    this.hp = this.maxHp;
+    this.invuln = 0;         // frames of post-hit mercy
+    this.stun = 0;           // frames of knockback tumble (no control)
+    this.dead = false;
   }
+
+  // knock the hero: side (kx) + forward/back (kz) impulses + a rise.
+  // returns 'block' (invuln), 'hit', or 'dead'.
+  hurt(kx, kz, up = 5.2) {
+    if (this.invuln > 0 || this.dead) return 'block';
+    this.hp -= 1;
+    this.invuln = HURT_INVULN;
+    if (this.hp <= 0) { this.dead = true; return 'dead'; }
+    this.stun = HURT_STUN;
+    this.vx = kx; this.vz = kz; this.vy = Math.max(this.vy, up);
+    this.grounded = false;
+    return 'hit';
+  }
+
+  bounce(v) { this.vy = v; this.grounded = false; this.cutArmed = false; }
 
   get pos() { return this.body.translation(); }
 
@@ -75,19 +103,26 @@ export class Player {
     const d = this.def;
     this.jumped = false;
     this.landed = false;
-    if (flags.spin && this.spinT <= 0) this.spinT = 28; // ~0.46s
+    if (this.invuln > 0) this.invuln -= 1;
+    const stunned = this.stun > 0;
+    if (stunned) this.stun -= 1;
+
+    if (flags.spin && !stunned && this.spinT <= 0) this.spinT = 28; // ~0.46s
     if (this.spinT > 0) this.spinT -= 1;
 
-    // auto-run along +Z, steering blends lateral speed
-    const targetVz = this.autoRun ? d.speed : 0;
-    const targetVx = flags.x * d.speed * 0.85;
+    // auto-run along +Z, steering blends lateral speed; wind pushes
+    // regardless of control. Stun locks out steering + wind.
+    const targetVz = this.autoRun && !stunned ? d.speed : 0;
+    const steer = stunned ? 0 : flags.x * d.speed * 0.85 * (d.steer ?? 1);
+    const targetVx = steer + (stunned ? 0 : (flags.windX || 0));
     const air = !this.grounded;
-    this.vz = approach(this.vz, targetVz, d.accel * (air ? 0.6 : 1) * dt);
-    this.vx = approach(this.vx, targetVx, d.accel * (air ? 0.6 : 1) * dt);
+    const airMul = air ? 0.6 * (d.airCtrl ?? 1) : 1;
+    this.vz = approach(this.vz, targetVz, d.accel * airMul * dt);
+    this.vx = approach(this.vx, targetVx, d.accel * airMul * dt);
     if (!this.autoRun && !air) this.vx = approach(this.vx, 0, d.friction * dt);
 
     // jump: buffer the press, consume within buffer or coyote window
-    if (flags.jump) this.buffer = BUFFER;
+    if (flags.jump && !stunned) this.buffer = BUFFER;
     else if (this.buffer > 0) this.buffer -= 1;
     if (this.buffer > 0 && (this.grounded || this.coyote > 0)) {
         this.jumped = true;
@@ -138,6 +173,11 @@ export class Player {
   respawn() {
     this.vx = this.vy = 0; this.vz = 0;
     this.spinT = 0;
+    // respawn at a checkpoint = full recovery with a breath of grace
+    this.hp = this.maxHp;
+    this.dead = false;
+    this.stun = 0;
+    this.invuln = 30;
     this.body.setTranslation(this.spawn, true);
   }
 }

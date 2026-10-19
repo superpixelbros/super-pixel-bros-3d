@@ -37,10 +37,24 @@ function kit(R, world, c) {
       c.coins.push({ x, y, z, taken: false });
     }
   };
-  return { ground, step, coinRow };
+  // scenery: solid, so a knocked-off-path hero thuds into it, but always
+  // planted clear of every running lane (keep |x| ≥ ~5.5 on the shoulders)
+  const decor = (kind, x, z) => {
+    const size = DECOR_KINDS[kind];
+    const b = world.createRigidBody(R.RigidBodyDesc.fixed()
+      .setTranslation(x, size.h, z));
+    world.createCollider(R.ColliderDesc.cuboid(size.r, size.h, size.r), b);
+    c.decor.push({ kind, x, z });
+  };
+  return { ground, step, coinRow, decor };
 }
 
-function makeHammer(R, world, z, omega, phase = 0) {
+const DECOR_KINDS = {
+  palm: { r: 0.28, h: 0.9 },   // trunk
+  rock: { r: 0.5, h: 0.42 },
+};
+
+export function makeHammer(R, world, z, omega, phase = 0) {
   const body = world.createRigidBody(
     R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 0, z));
   world.createCollider(
@@ -49,7 +63,7 @@ function makeHammer(R, world, z, omega, phase = 0) {
   return { body, z, omega, phase };
 }
 
-function makePillar(R, world, z, o = {}) {
+export function makePillar(R, world, z, o = {}) {
   const y0 = o.y0 ?? 0.55, amp = o.amp ?? 0.45, omega = o.omega ?? 2.0;
   const phase = o.phase ?? 0, half = o.half ?? 0.9;
   const body = world.createRigidBody(
@@ -58,10 +72,68 @@ function makePillar(R, world, z, o = {}) {
   return { body, z, phase, y0, amp, omega, x: o.x ?? 0.4, half };
 }
 
+// --- damaging hazards --------------------------------------------------------
+// A swinging wrecking ball on a rope, sweeping across the lane (Stumble
+// pivot push). Knockback-only (no collider): it hurts + staggers rather
+// than walling the path — the same sensor model as Stumble's swinging
+// hammers, so the auto-run bot can pass and the hit reads as a shove.
+export function makePendulum(R, world, z, o = {}) {
+  const L = o.len ?? 2.7, pivY = o.pivY ?? 3.5;
+  const ampA = o.ampA ?? 1.0;               // peak swing angle (rad)
+  const omega = o.omega ?? 2.2, phase = o.phase ?? 0, r = o.r ?? 0.62;
+  const body = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased()
+    .setTranslation(0, pivY - L, z));
+  return { kind: 'pendulum', body, z, L, pivY, ampA, omega, phase, r };
+}
+
+// A heavy log rolling side-to-side across the lane (Crash jungle rollers /
+// Stumble Jungle Roll). Knockback-only volume.
+export function makeRoller(R, world, z, o = {}) {
+  const amp = o.amp ?? 3.4, omega = o.omega ?? 1.5, phase = o.phase ?? 0;
+  const r = o.r ?? 0.9;
+  const body = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased()
+    .setTranslation(0, r, z));
+  return { kind: 'roller', body, z, amp, omega, phase, r };
+}
+
+// A block punching side-to-side on a rail — too tall to jump, must be
+// timed (Stumble moving blocks). Knockback-only volume.
+export function makePiston(R, world, z, o = {}) {
+  const amp = o.amp ?? 3.6, omega = o.omega ?? 1.35, phase = o.phase ?? 0;
+  const hy = o.hy ?? 1.4;
+  const body = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased()
+    .setTranslation(0, hy, z));
+  return { kind: 'piston', body, z, amp, omega, phase, hy };
+}
+
+// --- beneficial / zone props -------------------------------------------------
+export function makeBounce(R, world, x, z, o = {}) {
+  return { x, z, r: o.r ?? 0.95, up: o.up ?? 15.5 };
+}
+export function makeWind(R, world, z0, z1, o = {}) {
+  return { z0, z1, dir: o.dir ?? 1, force: o.force ?? 4.2 };
+}
+// A bridge slab that gives way ~0.6s after you step on it (Crash drop
+// platforms / Stumble Honey Drop). FIXED collider — the character
+// controller treats flush kinematic seams as walls, so it must share the
+// ground's body type. When it goes, the body is removed and the mesh
+// falls away in the renderer (c.fallT drives the animation).
+export function makeCrumble(R, world, z0, z1, o = {}) {
+  const top = o.top ?? 0, x0 = o.x0 ?? -4.5, x1 = o.x1 ?? 4.5;
+  const body = world.createRigidBody(R.RigidBodyDesc.fixed()
+    .setTranslation((x0 + x1) / 2, top - 1, (z0 + z1) / 2));
+  world.createCollider(R.ColliderDesc.cuboid((x1 - x0) / 2, 1, (z1 - z0) / 2),
+    body);
+  return { body, x0, x1, z0, z1, top, timer: 0, gone: false, removed: false,
+    fallT: 0 };
+}
+
 function newCourse(theme) {
   return {
     theme,
     segs: [], steps: [], shoulders: [], coins: [], hammers: [], pillars: [],
+    pendulums: [], rollers: [], pistons: [], crumbles: [], bounces: [],
+    winds: [],
     checkpoints: [], decor: [], jumpZones: [],
     narrows: [],        // [z0, z1, maxLaneRadius] — AI lane clamps
     finishZ: 0, spawn: { x: 0, y: 1.6, z: -3 }, coinTotal: 0,
@@ -77,7 +149,7 @@ const THEME_SHORE = {
 
 export function buildShore(R, world) {
   const c = newCourse(THEME_SHORE);
-  const { ground, step, coinRow } = kit(R, world, c);
+  const { ground, step, coinRow, decor } = kit(R, world, c);
 
   ground(-18, 16);                     // menu pedestal at z=-14
   coinRow(4, 10, 4);
@@ -100,6 +172,12 @@ export function buildShore(R, world) {
   coinRow(70, 78, 5, 0.9, -2.4);
   coinRow(70, 78, 5, 0.9, 2.4);
 
+  // gentle new-toys intro: one pendulum to time on the wide ground, and a
+  // bonus bounce pad (off to the side) that launches you to a high coin arc
+  c.pendulums.push(makePendulum(R, world, 24, { omega: 2.0 }));
+  c.bounces.push(makeBounce(R, world, 3.2, 62, { up: 14 }));
+  coinRow(62, 63.5, 2, 3.0, 3.2);
+
   c.checkpoints.push({ z: 28, x: 0, y: 1.6 }, { z: 66, x: 0, y: 1.6 });
   c.jumpZones.push([14.6, 15.4], [29.3, 30.3], [32.3, 33.3], [51.0, 51.8]);
   c.narrows.push([50.2, 55.6, 0.9]);
@@ -108,9 +186,9 @@ export function buildShore(R, world) {
   c.coinTotal = c.coins.length;
 
   for (let z = 2; z < 86; z += 9.3) {
-    c.decor.push({ kind: 'palm', x: z % 2 < 1 ? -6.4 : 6.4, z });
+    decor('palm', z % 2 < 1 ? -6.4 : 6.4, z);
   }
-  c.decor.push({ kind: 'rock', x: 5.6, z: 12 }, { kind: 'rock', x: -5.8, z: 63 });
+  decor('rock', 5.6, 12); decor('rock', -5.8, 63);
   return c;
 }
 
@@ -123,7 +201,7 @@ const THEME_RIDGE = {
 
 export function buildRidge(R, world) {
   const c = newCourse(THEME_RIDGE);
-  const { ground, step, coinRow } = kit(R, world, c);
+  const { ground, step, coinRow, decor } = kit(R, world, c);
 
   ground(0, 14);
   coinRow(4, 9, 3);
@@ -149,8 +227,17 @@ export function buildRidge(R, world) {
     makePillar(R, world, 57.6, { y0: 0.3, amp: 0.3, omega: 1.8, phase: 0, half: 1.1, x: 0.2 }),
     makePillar(R, world, 60.2, { y0: 0.3, amp: 0.3, omega: 1.8, phase: Math.PI, half: 1.1, x: -0.2 }));
   coinRow(57.0, 60.4, 3, 1.7);
-  ground(61.2, 72);
-  coinRow(64, 68, 3);
+  // mid-run roller (wide ground), then a CRUMBLE crossing: the cracked slab
+  // over the void gives way 0.6s after you land — keep moving or drop
+  c.rollers.push(makeRoller(R, world, 20, { amp: 3.2, omega: 1.7 }));
+  ground(61.2, 66);
+  c.crumbles.push(makeCrumble(R, world, 66, 68.6, { x0: -2.4, x1: 2.4 }));
+  ground(68.6, 72);
+  coinRow(63.5, 67, 3);
+  // piston gauntlet on the wide ground past the checkpoint
+  c.pistons.push(makePiston(R, world, 50, { amp: 3.4, omega: 1.6 }));
+  // crosswind over the narrow ledge — lean into it or drift off
+  c.winds.push(makeWind(R, world, 36.2, 43.8, { dir: 1, force: 2.2 }));
   // ridge staircase: two 0.7m plateaus
   ground(72, 76, 0.7);
   coinRow(73, 75, 2, 1.7);
@@ -162,7 +249,7 @@ export function buildRidge(R, world) {
   coinRow(85.5, 88, 2, 0.9, -2.4);
   coinRow(92, 94.5, 2, 0.9, 2.4);
 
-  c.checkpoints.push({ z: 52, x: 0, y: 1.6 }, { z: 68, x: 0, y: 1.6 });
+  c.checkpoints.push({ z: 52, x: 0, y: 1.6 }, { z: 63, x: 0, y: 1.6 });
   c.jumpZones.push(
     [13.2, 14.0], [43.2, 44.0],
     [55.2, 56.1], [57.8, 58.7], [60.2, 61.1],
@@ -174,30 +261,110 @@ export function buildRidge(R, world) {
   c.coinTotal = c.coins.length;
 
   for (let z = 6; z < 92; z += 14.5) {
-    c.decor.push({ kind: 'palm', x: (z / 14.5 | 0) % 2 ? 6.6 : -6.6, z });
+    decor('palm', (z / 14.5 | 0) % 2 ? 6.6 : -6.6, z);
   }
-  c.decor.push({ kind: 'rock', x: 5.8, z: 20 }, { kind: 'rock', x: -6, z: 66 },
-    { kind: 'rock', x: 6, z: 80 });
+  decor('rock', 5.8, 20); decor('rock', -6, 66); decor('rock', 6, 80);
   return c;
 }
 
 // ---------------------------------------------------------------- shared
 
-// advance kinematic hazards; call before world.step() each tick
-export function courseStep(R, course, frame) {
+// advance kinematic hazards; call before world.step() each tick. Also
+// re-derives each hazard's axis-aligned damage box (harm) and, for
+// crumbles, the stand-on timer. Pass a hero (player or rival) to trigger
+// crumbles; the reachability bot omits it.
+export function courseStep(R, course, frame, hero = null) {
   const t = frame / 60;
   for (const h of course.hammers) {
     const a = t * h.omega + h.phase;
     h.body.setNextKinematicRotation(
       { x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos(a / 2) });
+    h.harm = a;
   }
   for (const p of course.pillars) {
     const y = p.y0 + Math.sin(t * p.omega + p.phase) * p.amp;
     p.body.setNextKinematicTranslation({ x: p.x, y, z: p.z });
   }
+  for (const p of course.pendulums) {
+    const th = p.ampA * Math.sin(t * p.omega + p.phase);
+    p.bx = Math.sin(th) * p.L;
+    p.by = p.pivY - Math.cos(th) * p.L;
+    p.vel = Math.cos(t * p.omega + p.phase);
+    p.body.setNextKinematicTranslation({ x: p.bx, y: p.by, z: p.z });
+  }
+  for (const r of course.rollers) {
+    const s = t * r.omega + r.phase;
+    r.bx = Math.sin(s) * r.amp;
+    r.vel = Math.cos(s);
+    r.body.setNextKinematicTranslation({ x: r.bx, y: r.r, z: r.z });
+  }
+  for (const p of course.pistons) {
+    const s = t * p.omega + p.phase;
+    p.bx = Math.sin(s) * p.amp;
+    p.vel = Math.cos(s);
+    p.body.setNextKinematicTranslation({ x: p.bx, y: p.hy, z: p.z });
+  }
+  for (const c of course.crumbles) {
+    if (c.gone) { c.fallT++; continue; }     // body removed by game.step;
+    const on = hero && hero.grounded        // fallT animates the mesh
+      && hero.pos.x > c.x0 && hero.pos.x < c.x1
+      && hero.pos.z > c.z0 && hero.pos.z < c.z1;
+    if (on) {
+      if (++c.timer > CRUMBLE_FRAMES) c.gone = true;
+    } else if (c.timer > 0) c.timer = 0;           // grace: shake resets
+  }
 }
 
+const CRUMBLE_FRAMES = 36;   // ~0.6s standing before it drops (keep moving)
+
+// The moment a hero overlaps a damaging hazard: returns a knockback vector
+// {kx, kz} (m/s) or null. Invulnerability / hearts are the hero's concern.
+// Boxes are one-frame-laggy vs the rendered pose (queries see the previous
+// step) — the same determinism the hammer already lives with.
+export function hazardTouch(course, pos) {
+  const R_ = 0.32;                       // hero capsule radius
+  // rotating hammer: the bar is a long slab sweeping in the X-Z plane. The
+  // hero is hit when the bar's line passes through their capsule (perp
+  // distance small) within the bar's reach along its length.
+  for (const h of course.hammers) {
+    const dx = pos.x, dz = pos.z - h.z, a = h.harm || 0;
+    const ux = Math.cos(a), uz = -Math.sin(a);       // along the bar
+    const nx = Math.sin(a), nz = Math.cos(a);        // bar normal
+    const along = dx * ux + dz * uz;
+    const perp = dx * nx + dz * nz;
+    if (Math.abs(perp) < 0.27 + R_ && along > -1.6 && along < 4.7)
+      return { kx: nx * Math.sign(perp || 1) * 6, kz: nz * Math.sign(perp || 1) * 6 };
+  }
+  for (const p of course.pendulums) {
+    const dx = pos.x - p.bx, dy = pos.y - p.by, dz = pos.z - p.z;
+    if (Math.hypot(dx, dy, dz) < p.r + R_)
+      return { kx: Math.sign(p.vel) * 6.2, kz: -2.5 };
+  }
+  for (const r of course.rollers) {
+    if (Math.abs(pos.x - r.bx) < 0.62 + R_ && Math.abs(pos.z - r.z) < r.r + R_)
+      return { kx: Math.sign(r.vel) * 5.8, kz: -3 };
+  }
+  for (const p of course.pistons) {
+    if (Math.abs(pos.x - p.bx) < 0.7 + R_ && Math.abs(pos.z - p.z) < 0.5 + R_)
+      return { kx: Math.sign(p.vel) * 6.6, kz: -2 };
+  }
+  return null;
+}
+
+// wind push for a hero at pos (m/s² lateral), or 0
+export function windAt(course, pos) {
+  for (const w of course.winds) {
+    if (pos.z > w.z0 && pos.z < w.z1) return w.dir * w.force;
+  }
+  return 0;
+}
+
+// timeLimit (s) is the disqualification budget — generous vs the bot clears
+// (headless asserts ≥1.6× the slowest hero's clear) so it pressures pace
+// without punishing learning the course.
 export const LEVELS = [
-  { id: 'shore', nameKey: 'level.beach', build: buildShore, theme: THEME_SHORE },
-  { id: 'ridge', nameKey: 'level.ridge', build: buildRidge, theme: THEME_RIDGE },
+  { id: 'shore', nameKey: 'level.beach', build: buildShore, theme: THEME_SHORE,
+    timeLimit: 45 },
+  { id: 'ridge', nameKey: 'level.ridge', build: buildRidge, theme: THEME_RIDGE,
+    timeLimit: 70 },
 ];
