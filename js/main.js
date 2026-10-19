@@ -61,7 +61,7 @@ async function boot() {
 
   function toSelect() { game.state = 'select'; audio.sfx('select'); syncMenu(); }
   function toMap() {
-    game.enterMap();
+    game.enterMap(true);   // fresh run: map always opens on stage 1
     audio.setTheme(0);
     renderer.setHero('map:' + game.selectedHero());
     ui.show('map');
@@ -134,6 +134,9 @@ async function boot() {
     } else if (s === 'dq') {
       if (Input.pressed('Enter')) startLevel(game.levelIndex);
       if (Input.pressed('KeyQ')) toTitle();
+    } else if (s === 'lost') {
+      if (Input.pressed('Enter')) startLevel(game.levelIndex);
+      if (Input.pressed('KeyQ')) toTitle();
     } else if (s === 'victory') {
       if (Input.pressed('Enter')) toTitle();
     }
@@ -180,6 +183,10 @@ async function boot() {
         !game.isLastStage(), game.clearPlace);
     }
     if (game.state === 'dq') ui.show('dq');
+    if (game.state === 'lost') {
+      ui.show('lost');
+      ui.lost(game.clearPlace, LEVELS[game.levelIndex].passPlace);
+    }
 
     renderer.sync(game, game.state);
     renderer.render();

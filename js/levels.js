@@ -364,7 +364,7 @@ export function windAt(course, pos) {
 // without punishing learning the course.
 export const LEVELS = [
   { id: 'shore', nameKey: 'level.beach', build: buildShore, theme: THEME_SHORE,
-    timeLimit: 45 },
+    timeLimit: 45, passPlace: 3 },
   { id: 'ridge', nameKey: 'level.ridge', build: buildRidge, theme: THEME_RIDGE,
-    timeLimit: 70 },
+    timeLimit: 70, passPlace: 1 },
 ];

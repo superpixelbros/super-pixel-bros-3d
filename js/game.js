@@ -3,6 +3,8 @@
 // No three.js / DOM here — headless checks import this module directly.
 //
 // States: title → select → map → play ⇄ pause → clear → map … → victory.
+// Terminal fail states: 'dq' (time limit) and 'lost' (placement gate) —
+// both offer retry / title and keep rendering the live world behind them.
 // The map is pure logic here (cursor + hero-walk tween); the diorama is
 // the renderer's job.
 
@@ -24,6 +26,7 @@ export default class Game {
     this.map = { cursor: 0, walk: null }; // walk: {from, to, t 0..1}
     this.sfx = () => {};                 // main.js injects the audio hook
     this.hazardsOff = false;             // geometry-only bots (headless)
+    this.gatesOff = false;               // race-rule gates off for bots
   }
 
   selectedHero() { return HERO_IDS[this.heroIndex]; }
@@ -34,8 +37,10 @@ export default class Game {
   }
 
   // ---- adventure map (pure logic) --------------------------------------
-  enterMap() {
-    this.map.cursor = this.frontier;
+  // fromStart (title → select → map): the cursor always begins at stage 1;
+  // unlocks are kept, the player may move anywhere up to the frontier.
+  enterMap(fromStart = false) {
+    this.map.cursor = fromStart ? 0 : this.frontier;
     this.map.walk = null;
     this.disposeWorld();
     this.state = 'map';
@@ -164,6 +169,14 @@ export default class Game {
     if (p.z >= this.course.finishZ) {
       this.clearTime = this.timeF / 60;
       this.clearPlace = placement(this);
+      // each stage allows a worst place (Shore: top 3 of 4, Ridge: must
+      // win) — finishing worse than that ends the run, not just the stage
+      if (!this.gatesOff &&
+        this.clearPlace > LEVELS[this.levelIndex].passPlace) {
+        this.state = 'lost';
+        this.sfx('gameover');
+        return;
+      }
       this.state = 'clear';
       this.sfx('clear');
       return;

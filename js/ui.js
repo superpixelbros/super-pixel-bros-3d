@@ -88,6 +88,20 @@ export class UI {
         </div>
       </div>
 
+      <div class="screen hidden" id="sc-lost">
+        <div class="panel card dq">
+          <div class="dq-mark">💔</div>
+          <h2 data-key="lost.title"></h2>
+          <p class="result" id="lost-place"></p>
+          <p class="blurb" id="lost-rule"></p>
+          <div class="col">
+            <button class="btn big accent" id="b-lost-retry" data-key="lost.retry"></button>
+            <button class="btn ghost" id="b-lost-title" data-key="pause.quit"></button>
+          </div>
+          <p class="keys dim" data-key="lost.hint"></p>
+        </div>
+      </div>
+
       <div class="screen hidden" id="sc-map">
         <div class="topbar"><h2 data-key="map.title"></h2></div>
         <div class="map-panel panel">
@@ -123,6 +137,8 @@ export class UI {
     this.bind('b-done', () => this.cb.onDone());
     this.bind('b-dq-retry', () => this.cb.onRetry());
     this.bind('b-dq-title', () => this.cb.onTitle());
+    this.bind('b-lost-retry', () => this.cb.onRetry());
+    this.bind('b-lost-title', () => this.cb.onTitle());
     this.bind('b-victory', () => this.cb.onTitle());
     this.bind('b-map-prev', () => this.cb.onMapMove(-1));
     this.bind('b-map-next', () => this.cb.onMapMove(1));
@@ -147,11 +163,11 @@ export class UI {
     const map = {
       title: ['sc-title'], select: ['sc-select'], play: ['sc-hud'],
       pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'], dq: ['sc-dq'],
-      map: ['sc-map'], victory: ['sc-victory'],
+      lost: ['sc-lost'], map: ['sc-map'], victory: ['sc-victory'],
     };
     const ids = new Set(map[name] || []);
     for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear',
-      'sc-dq', 'sc-map', 'sc-victory']) {
+      'sc-dq', 'sc-lost', 'sc-map', 'sc-victory']) {
       this.root.querySelector('#' + id).classList.toggle('hidden', !ids.has(id));
     }
   }
@@ -206,6 +222,14 @@ export class UI {
     const b = this.root.querySelector('#b-done');
     b.dataset.key = hasNext ? 'clear.hint_next' : 'clear.hint';
     b.textContent = t(b.dataset.key);
+  }
+
+  // placement gate failure: which place, and which rule it broke
+  lost(place, passPlace) {
+    this.root.querySelector('#lost-place').textContent =
+      t('clear.place', { p: place, m: FIELD_SIZE });
+    this.root.querySelector('#lost-rule').textContent =
+      t(passPlace <= 1 ? 'lost.rule_win' : 'lost.rule_top3');
   }
 
   setMap(num, name, cleared) {

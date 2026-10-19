@@ -310,7 +310,11 @@ export class Renderer {
   // ---- per-frame ---------------------------------------------------------
   sync(game, state) {
     const t = performance.now() / 1000;
-    const p = state === 'play' || state === 'pause' || state === 'clear'
+    // every run world state — incl. the terminal cards — keeps posing the
+    // hero and driving the follow cam (previously dq froze the camera and
+    // teleported the hero back to the menu pedestal)
+    const p = (state === 'play' || state === 'pause' || state === 'clear'
+      || state === 'dq' || state === 'lost' || state === 'victory')
       ? game.player : null;
 
     if (this.coinMeshes) {
@@ -378,7 +382,8 @@ export class Renderer {
 
     // rivals race only inside the course world
     this.rivalGroup.visible = (state === 'play' || state === 'pause'
-      || state === 'clear' || state === 'dq') && this.rivalParts.length > 0;
+      || state === 'clear' || state === 'dq' || state === 'lost'
+      || state === 'victory') && this.rivalParts.length > 0;
     if (this.rivalGroup.visible) {
       for (let i = 0; i < game.rivals.length; i++) {
         const p = game.rivals[i].player;
