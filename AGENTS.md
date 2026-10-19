@@ -44,24 +44,29 @@ node tools/headless.mjs
 edge-trigger contract, full Rapier-physics runs (auto-run, jump arc, coins,
 checkpoints, fall-respawn, finish), **per-hero × per-level full clears** —
 every hero must CLEAR every level death-free via a bot that jumps inside
-`course.jumpZones` — a rivals race check (autopilot must progress + finish),
-and the adventure-map logic. Run it after ANY edit to `levels.js`,
-`hero.js`, `game.js` or `rivals.js`.
+`course.jumpZones` (bots run with `game.hazardsOff = true`: they prove
+platforming GEOMETRY and pace, not hazard timing), a roster fair band
+(slowest ≤ 1.40× fastest clear time), scenery solidity, the damage model
+(`hurt()` hearts/invuln/knockback + live pendulum hit + crumble→fall→
+respawn), time-limit calibration (limit ≥ 1.6× slowest bot) + DQ + retry
+reset, a rivals race check (autopilot must progress + finish), and the
+adventure-map logic. Run it after ANY edit to `levels.js`, `hero.js`,
+`game.js` or `rivals.js`.
 
 ## Architecture
 
 | File | Responsibility |
 |---|---|
 | `js/main.js` | boot, state routing (`title/select/map/play/pause/clear/victory`), fixed 60 Hz loop, key routing, progress persistence, resize, SW registration (never on localhost) |
-| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic; coin/checkpoint/respawn/finish/placement rules; `sfx()` no-op hook injected by main. **No DOM, no three** |
-| `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags. `HERO_RADIUS`/`HERO_HALF` are the size source of truth. **No three** |
-| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme}]` + shared kit (ground/step/coin, hammer, pillar) + `courseStep()`. Sunny Shore + Sunset Ridge. **No three** |
-| `js/rivals.js` | 3 autopiloted `Player` instances (custom stat defs, lanes, jitter, vault-if-blocked, checkpoint respawn); `placement()` for the HUD. Solid kinematic capsules — shoving works. Netcode seam: inputs → determinate sim. **No three** |
-| `js/audio.js` | WebAudio synth: SFX (jump/land/spin/coin/checkpoint/fall/clear/trophy/menu) + one original chiptune loop per stage, ducked on pause; `pixelbros3d_mute`; unlock on first gesture |
+| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic; coin/checkpoint/respawn/finish/placement rules; time-limit DQ (`state === 'dq'`, tick sfx); applies hazards/wind/bounce to the hero (and crumble removal); `hazardsOff` flag for geometry-only bots; `sfx()` no-op hook injected by main. **No DOM, no three** |
+| `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags, damage model (`hurt()` → hearts, `stun` lockout, knockback, 1.2s invuln, `dead` at 0; `respawn()` = full heal + 0.5s grace; falls are always instant deaths). `speed`/`jump`/`hp`/`steer`/`airCtrl`/`floaty` define each hero. `HERO_RADIUS`/`HERO_HALF` are the size source of truth. **No three** |
+| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme, timeLimit}]` + shared kit: ground/step/coin/**decor** (solid trunks & rocks, always ≥1m off-lane), hazards: hammer (physical turnstile), pendulum/roller/piston (**knockback sensors — no collider**), crumble (fixed slab removed on give-way), bounce pad + wind zones (pure zones); `courseStep()` animates them + crumble timers, `hazardTouch()` returns a knock vector, `windAt()` lateral push. Sunny Shore (gentle: 1 pendulum, bonus bounce, hammer) → Sunset Ridge (roller, hammers, crosswind ledge, piston, crumble crossing, pillars). **No three** |
+| `js/rivals.js` | 3 autopiloted `Player` instances (speed = chosen hero's speed × {1.10, 0.98, 0.87} + their own jump copy, lanes, jitter, vault-if-blocked, checkpoint respawn); `placement()` for the HUD. Solid kinematic capsules — shoving works; they eat hazard knockback too (hp 99 = stumble, never die). Netcode seam: inputs → determinate sim. **No three** |
+| `js/audio.js` | WebAudio synth: SFX (jump/land/spin/coin/checkpoint/fall/clear/trophy/menu/hit/die/bounce/tick/gameover) + one original chiptune loop per stage, ducked on pause; `pixelbros3d_mute`; unlock on first gesture |
 | `js/phys.js` | Rapier init + world factory; `STEP = 1/60` |
 | `js/renderer.js` | three.js scene: lights/shadows/fog/sea, per-level THEMES applied by `buildCourse`, course meshes, hero rig, rival meshes (`setRivals`), map diorama, follow/menu/map cameras |
 | `js/models.js` | procedural hero builder (boxes), `style` variants cap/keffiyeh/fletch |
-| `js/ui.js` | DOM screens (title/select/HUD+place/pause/clear/map/victory) with `data-key` re-render on language change |
+| `js/ui.js` | DOM screens (title/select/HUD+place+hearts+countdown/pause/clear/**dq**/map/victory) with `data-key` re-render on language change; timer turns gold <25% and pulses red <10% of the limit; 1st place makes the clear trophy glow gold |
 | `js/i18n.js` | en/ar tables, `t()`, `L` toggle, `<html lang/dir>`; `pixelbros3d_lang` |
 | `js/input.js` | keyboard + virtual keys, edge triggers, `endFrame()` — ported 1:1 from 2D |
 | `js/view.js` | viewport metrics: dpr cap 2, portrait/coarse flags |
@@ -91,6 +96,20 @@ behind `typeof`), so they run under plain Node for headless checks.
   platforms. That's why the wide gap uses a *bobbing vertical* pillar —
   vertical support works positionally. Think vertically when adding
   platforming hazards, or add explicit carry logic.
+- **Kinematic-seam freeze (real bug this project ate):** the character
+  controller will NOT walk across a flush seam from a *fixed* collider
+  onto a *kinematic* one at the same height — small moves compute to zero
+  movement and the hero grinds to a halt (only a shove of ~0.5 m frees
+  it). Fixed→fixed seams are fine, and jumping *onto* a kinematic top is
+  fine — it's walking across the seam edge-on that dies. So: any walkable
+  surface that must share a seam with the ground (crumble slabs!) is
+  `RigidBodyDesc.fixed()` — remove the body when it gives way (safe
+  between `world.step()` calls) and animate the mesh separately.
+- Knockback hazards (pendulum/roller/piston) are **sensors by design**:
+  no collider, damage+knock via `hazardTouch()` per frame — Stumble-Guys
+  style shoves. Solid colliders on sweep hazards would wall the auto-run
+  path and the reachability bot; only the hammer turnstile keeps a real
+  collider (it sweeps, so there is always a gap to run through).
 - `rapier.mjs` runs under Node with `await RAPIER.init()` — that's how the
   headless tests run real physics.
 
@@ -118,11 +137,32 @@ behind `typeof`), so they run under plain Node for headless checks.
 - Fixed 60 Hz everywhere; per-tick, deterministic, testable.
 - Auto-run along **+Z** (Crash-style); steering is one axis, jump is hold-
   for-height with a −0.45× release cut, coyote 6f, buffer 7f.
-- **Design for the worst hero**: Faris (4.8 m/s) full-hold clears a bare gap
-  of ≈4.3m (≈4m of usable margin), Sahm's low jump tops out ≈1.6m — bare
-  gaps ≤ 3m, step-ups ≤ 0.7m, everything wider needs a crossing within
-  reach. Headless enforces: **every hero × every level must fully clear,
-  death-free**.
+- **Design for the worst hero**: Faris (6.6 m/s, jump 10.2) full-holds a
+  bare gap of ≈5m (keep ≤3m anyway for margin), Sahm's low jump (8.6)
+  tops out ≈1.6m — step-ups ≤ 0.7m, everything wider needs a crossing
+  within reach. Headless enforces: **every hero × every level must fully
+  clear, death-free** (bots run `hazardsOff` — geometry & pace only).
+- **Balance law (headless-enforced)**: clear-time spread across the whole
+  roster per level ≤ **1.40×** (speeds live at 6.6–8.4 m/s — bold but
+  bounded; every distinction has a cost: Bolt understeers in air, Sahm
+  has brake-slip + 1 heart, Faris trades speed for 3 hearts + sharp
+  cuts). Race fairness comes from RIVALS SCALING to your pick
+  (`speedMul` ratios), not from identical stats.
+- **Ways to lose**: the stage **time limit** is the only fail state —
+  running out flips `game.state = 'dq'` → DISQUALIFIED card (ENTER
+  retry resets clock+hearts, Q to title). Hearts are the damage buffer:
+  a hazard costs one heart + knockback; at zero hearts *or* any fall the
+  hero dies, respawns at the last checkpoint fully healed, and the lost
+  seconds are the punishment. Limits are generous: headless asserts
+  `timeLimit ≥ 1.6× slowest bot clear` (Shore 45s, Ridge 70s).
+- **Hazard placement law**: hazards must always have a safe moment (they
+  oscillate) and never require stopping inside a hazard; place knockback
+  hazards on wide ground/shoulders, never where a hit drops you into an
+  unavoidable death loop; keep ≥2m buffer after mandatory landings;
+  crosswind force ≤ ~2.5 so lean-in works; a crumble crossing must be
+  crossable at a run (give-way ≈0.6s) and the nearest checkpoint must sit
+  *before* it. Telegraph visually — swinging rope, cracked slab, steel
+  block.
 - **`jumpZones` are ground truth**: every z-range where a jump is required
   (gaps, pillar hops, step hops) must be listed in the level's
   `jumpZones.push(...)` — the reachability bot AND rival autopilots jump
@@ -159,8 +199,8 @@ behind `typeof`), so they run under plain Node for headless checks.
   a rival is just a scripted `Player`-like mover).
 - three.js + Rapier over Babylon/Unity (control + footprint + references).
 - Hybrid UI: live 3D stage, crisp DOM panels (Arabic/RTL/a11y stay free).
-- One level ("Sunny Shore") → trophy; progression content comes as more
-  levels, not more systems, until asked.
+- One hero, one course flow per run; progression = more levels in the
+  `LEVELS` registry (now Shore + Ridge), not more systems, until asked.
 - Vendored libs + service-worker precache = offline PWA; SW never registers
   on localhost; `VERSION` bump per change, incl. `vendor/`.
 - Commit/push only when the user asks.
@@ -173,12 +213,19 @@ behind `typeof`), so they run under plain Node for headless checks.
 3. Audio ✅: WebAudio synth SFX + per-stage chiptune, mute key, ducking.
 4. AI rivals ✅: 3 autopiloted racers, solid contact, place HUD + finish
    place on the clear screen (netcode seam: flags in, determinate sim out).
-5. Badges/relics: time trial tiers + all-coins challenge, shown on the
+5. **Fairness, Consequences, Chaos wave** ✅: solid scenery, hero rebalance
+   (6.6–8.4 m/s spread + fair band), hearts + knockback + stun, hazard kit
+   (pendulum/roller/piston/crumble/bounce/wind + hammer damage), rivals eat
+   hazards too, per-stage time limit → DISQUALIFIED card with countdown
+   HUD (gold <25%, red pulse <10% + tick), gold trophy glow for 1st,
+   hazardified Ridge.
+6. Badges/relics: time trial tiers + all-coins challenge, shown on the
    clear screen; best times via localStorage.
-6. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
+7. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
    `gen-icons.mjs` pattern), GitHub Pages deploy for the new
    `superpixelbros/super-pixel-bros-3d` repo (enabled — pending).
-7. More levels (`LEVELS` entries + diorama nodes grow automatically).
+8. More levels (`LEVELS` entries + diorama nodes grow automatically) —
+   stage 3 sketch: "Storm Foundry" (pistons + conveyors + boulder chase).
 
 ## Ideas that fit
 

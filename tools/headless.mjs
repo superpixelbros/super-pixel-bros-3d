@@ -11,8 +11,11 @@ import { TABLES, t } from '../js/i18n.js';
 import Input from '../js/input.js';
 import { initPhysics } from '../js/phys.js';
 import Game from '../js/game.js';
-import { LEVELS } from '../js/levels.js';
-import { HERO_IDS } from '../js/hero.js';
+import {
+  LEVELS, hazardTouch, windAt, courseStep, makeHammer, makePendulum,
+  makeRoller, makePiston, makeCrumble, makeBounce, makeWind,
+} from '../js/levels.js';
+import { Player, HERO_IDS } from '../js/hero.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const jsDir = join(here, '..', 'js');
@@ -68,6 +71,7 @@ function mkGame(id, level = 0) {
 }
 
 const g = mkGame('rosso');
+g.hazardsOff = true;   // mechanics probe: hazards get their own section
 ok(g.state === 'play' && g.player, 'start() enters play with a player');
 
 // run 2s: auto-run should carry us forward with no input
@@ -122,9 +126,12 @@ ok(g3.state === 'clear' && g3.clearTime > 0, `finished → clear in ${g3.clearTi
 // hold (slow heroes need full height). This is the reachability gate —
 // extend levels, it follows automatically.
 console.log('roster reachability');
+const levelTimes = LEVELS.map(() => []);
 for (let li = 0; li < LEVELS.length; li++) {
   for (const id of HERO_IDS) {
     const h = mkGame(id, li);
+    h.hazardsOff = true;   // geometry + pace probe: timed hazards are the
+                           // human problem, the bot proves the platforming
     const zones = h.course.jumpZones;
     let hold = 0;
     for (let i = 0; i < 3600 && h.state === 'play'; i++) {
@@ -136,15 +143,142 @@ for (let li = 0; li < LEVELS.length; li++) {
       if (hold > 0) hold--;
     }
     const q = h.player.pos;
+    const tSec = h.timeF / 60;
+    levelTimes[li].push({ id, t: tSec });
     ok(h.state === 'clear' && Number.isFinite(q.x + q.y + q.z),
-      `${LEVELS[li].id}/${id}: cleared t=${(h.timeF / 60).toFixed(1)}s` +
+      `${LEVELS[li].id}/${id}: cleared t=${tSec.toFixed(1)}s` +
       ` deaths=${h.deaths} coins=${h.coins}/${h.course.coinTotal}`);
     h.disposeWorld();
   }
 }
+// balance guard: bold but bounded — no hero may be more than 1.40× slower
+// than the fastest. (True race fairness comes from rivals scaling to your
+// pick; this only catches a stat regression making one hero unviable.)
+for (let li = 0; li < LEVELS.length; li++) {
+  const ts = levelTimes[li];
+  if (!ts.every((e) => e.t > 0)) continue;   // a fail already reported
+  const fast = Math.min(...ts.map((e) => e.t));
+  const slow = ts.reduce((a, e) => (e.t > a.t ? e : a));
+  ok(slow.t / fast <= 1.40,
+    `${LEVELS[li].id} fair band: ${slow.id} ${slow.t.toFixed(1)}s` +
+    ` vs fastest ${fast.toFixed(1)}s = ${(slow.t / fast).toFixed(2)}x ≤ 1.40`);
+}
 g.disposeWorld(); g2.disposeWorld(); g3.disposeWorld();
 
-// ---- 4) AI rivals race along ----------------------------------------------
+// ---- 4) scenery is solid ---------------------------------------------------
+// palm trunk at (−6.4, z=2) on the shore shoulder: a hero pushed into it
+// must stop at the bark, not ghost through
+console.log('scenery collisions');
+{
+  const tg = mkGame('rosso', 0);
+  tg.player.autoRun = false;
+  tg.player.body.setTranslation({ x: -5.0, y: 1.2, z: 2 }, true);
+  for (let i = 0; i < 90; i++) {
+    tg.step({ x: -1, jump: false, jumpHeld: false, spin: false });
+  }
+  const tx = tg.player.pos.x;
+  ok(tx < -5.2 && tx > -5.82,
+    `hero stops at the palm trunk (x=${tx.toFixed(2)})`);
+  tg.disposeWorld();
+}
+
+// ---- 5) damage model + hazard geometry ------------------------------------
+console.log('damage + hazards');
+{
+  const hg = mkGame('faris', 0);          // faris = 3 hearts
+  const pl = hg.player;
+  ok(pl.hp === 3 && pl.maxHp === 3, 'faris starts with 3 hearts');
+  ok(pl.hurt(6, -2) === 'hit' && pl.hp === 2, 'hurt costs a heart');
+  ok(pl.stun > 0 && pl.vy > 0, 'hurt knocks the hero back and up');
+  ok(pl.hurt(6, -2) === 'block', 'a second hit during invuln is blocked');
+  pl.invuln = 0; pl.hurt(6, -2);          // 2 -> 1
+  pl.invuln = 0;
+  ok(pl.hurt(6, -2) === 'dead' && pl.hp === 0, 'losing the last heart is death');
+  pl.respawn();
+  ok(pl.hp === 3 && !pl.dead, 'respawn restores full hearts');
+  hg.disposeWorld();
+
+  const hit = (haz, pos) => hazardTouch(
+    { hammers: [], pendulums: [], rollers: [], pistons: [], ...haz }, pos);
+  ok(hit({ rollers: [{ z: 0, r: 0.9, bx: 0, vel: 1 }] }, { x: 0, y: 0.9, z: 0 }),
+    'roller knocks a hero in its path');
+  ok(!hit({ rollers: [{ z: 0, r: 0.9, bx: 3.4, vel: 1 }] }, { x: 0, y: 0.9, z: 0 }),
+    'roller off to the side is safe');
+  ok(hit({ pistons: [{ z: 0, hy: 1.4, bx: 0, vel: -1 }] }, { x: 0, y: 1, z: 0 }),
+    'piston knocks a hero in its path');
+  ok(hit({ pendulums: [{ z: 0, r: 0.62, bx: 0, by: 0.8, vel: 1 }] }, { x: 0, y: 0.8, z: 0 }),
+    'low pendulum knocks');
+  ok(!hit({ pendulums: [{ z: 0, r: 0.62, bx: 0, by: 2.6, vel: 1 }] }, { x: 0, y: 0.8, z: 0 }),
+    'pendulum raised at the pivot is safe underneath');
+  ok(hit({ hammers: [{ z: 0, harm: 0 }] }, { x: 2.5, y: 0.7, z: 0 }),
+    'hammer bar pointing at the hero knocks');
+  ok(!hit({ hammers: [{ z: 0, harm: Math.PI / 2 }] }, { x: 2.5, y: 0.7, z: 0 }),
+    'hammer bar rotated away is safe');
+
+  const wg = mkGame('rosso', 0);
+  // integration: a real hero standing in the shore pendulum's path eats a
+  // hit from the live game loop (geometry, not just unit math)
+  wg.player.autoRun = false;
+  wg.player.body.setTranslation({ x: 0, y: 1.2, z: 24 }, true);
+  for (let i = 1; i <= 220 && wg.player.hp === wg.player.maxHp; i++) {
+    wg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(wg.player.hp === wg.player.maxHp - 1,
+    'shore pendulum hits a hero in the live loop');
+  ok(windAt({ winds: [{ z0: 10, z1: 20, dir: -1, force: 4 }] }, { z: 15 }) === -4,
+    'wind pushes in its direction within its span');
+  ok(windAt({ winds: [{ z0: 10, z1: 20, dir: 1, force: 4 }] }, { z: 30 }) === 0,
+    'no wind outside the zone');
+  const cr = makeCrumble(R, wg.world, 100, 101, { top: 0, x0: -4, x1: 4 });
+  wg.course.crumbles.push(cr);
+  const stub = { grounded: true, pos: { x: 0, y: 0.7, z: 100.5 } };
+  for (let i = 1; i <= 40; i++) courseStep(R, wg.course, i, stub);
+  ok(cr.gone, 'crumble drops after standing on it');
+  wg.disposeWorld();
+
+  // live ridge crumble: stand on it → it gives way → real fall → cp respawn
+  const cg = mkGame('rosso', 1);
+  cg.player.autoRun = false;
+  cg.player.body.setTranslation({ x: 0, y: 1.2, z: 67.2 }, true);
+  const slab = cg.course.crumbles[0];
+  for (let i = 0; i < 240 && !slab.removed; i++) {
+    cg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(slab.gone && slab.removed, 'ridge crumble slab removed from physics');
+  for (let i = 0; i < 240 && cg.deaths === 0; i++) {
+    cg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(cg.deaths === 1 && cg.player.spawn.z >= 63,
+    'dropping through the crumble respawns at the checkpoint');
+  cg.disposeWorld();
+}
+
+// ---- 6) clock + disqualification ------------------------------------------
+console.log('clock + disqualification');
+{
+  // calibration: every limit is generous vs the best achievable (bot) time
+  for (let li = 0; li < LEVELS.length; li++) {
+    const ts = levelTimes[li].filter((e) => e.t > 0);
+    if (!ts.length) continue;
+    const slow = Math.max(...ts.map((e) => e.t));
+    ok(LEVELS[li].timeLimit >= 1.6 * slow,
+      `${LEVELS[li].id} limit ${LEVELS[li].timeLimit}s ≥ 1.6× slowest bot ` +
+      `${slow.toFixed(1)}s`);
+  }
+  const dg = mkGame('rosso', 0);
+  dg.hazardsOff = true;
+  dg.timeLimit = 1;                         // force the clock to run out
+  for (let i = 0; i < 120 && dg.state === 'play'; i++) {
+    dg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(dg.state === 'dq', 'running out of time disqualifies');
+  dg.start(0);                               // retry the same stage
+  ok(dg.state === 'play' && dg.timeF === 0 &&
+    dg.timeLimit === LEVELS[0].timeLimit, 'retry resets the clock');
+  dg.disposeWorld();
+}
+
+// ---- 7) AI rivals race along ----------------------------------------------
 // Rivals run the SAME course on autopilot: they must make real progress,
 // stay finite, finish, and yield a sane hero placement.
 console.log('rivals');
@@ -160,9 +294,11 @@ console.log('rivals');
     rg.step({ x: 0, jump, jumpHeld: hold > 0, spin: false });
     if (hold > 0) hold--;
   }
-  // hero stands at the flag; let the rivals run out their race
-  for (let i = 0; i < 1800; i++) {
-    for (const r of rg.rivals) r.step(rg.course, 3600 + i, 60 + i / 60);
+  // hero stands at the flag; let the rivals run out their race on a clock
+  // continuous with the hero's, so finish times are honest
+  const f0 = rg.timeF;
+  for (let i = 1; i <= 1800; i++) {
+    for (const r of rg.rivals) r.step(rg.course, f0 + i, (f0 + i) / 60);
     rg.world.step();
   }
   for (const r of rg.rivals) {
@@ -177,7 +313,7 @@ console.log('rivals');
   rg.disposeWorld();
 }
 
-// ---- 5) adventure map logic -----------------------------------------------
+// ---- 8) adventure map logic -----------------------------------------------
 console.log('adventure map');
 const mg = new Game(R);
 mg.enterMap();
