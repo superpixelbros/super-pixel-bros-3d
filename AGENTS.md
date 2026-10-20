@@ -46,8 +46,12 @@ checkpoints, fall-respawn, finish), **per-hero × per-level full clears** —
 every hero must CLEAR every level death-free via a bot that jumps inside
 `course.jumpZones` (bots run with `game.hazardsOff` + `game.gatesOff`:
 they prove platforming GEOMETRY and pace, not hazard timing or race
-results), a roster fair band
-(slowest ≤ 1.40× fastest clear time), scenery solidity, the damage model
+results — plus `game.pickupsOff` so clear times stay comparable),
+a roster fair band
+(slowest ≤ 1.12× fastest clear time), a speed law (max/min roster run
+speed ≤ 1.05), the speed-pickup contract (boost/jinx apply → replace →
+expire, ground-only, rivals share them, arena ships none), scenery
+solidity, the damage model
 (`hurt()` hearts/invuln/knockback + live pendulum hit + crumble→fall→
 respawn), time-limit calibration (limit ≥ 1.6× slowest bot) + DQ + retry
 reset, a rivals race check (autopilot must progress + finish; a second race
@@ -55,8 +59,11 @@ runs LIVE on Ridge so the canyon gates, portcullis queue and Needle are
 stress-tested against soft-locks), **placement-gate outcomes** (forced
 finishing places: shore 4th → LOST, 3rd → clear; ridge must win), the
 **survival arena** (free-control movement, monotonic ring, wave escalation,
-out-of-ring → over, 90s → win), and the adventure-map logic (incl.
-fresh-run cursor = stage 1, unlocks kept, always-open arena node). Run it
+out-of-ring or hearts-drained → over, 60s → win) and the adventure-map +
+trophy logic (clearing a race stage walks to the next node — Ridge's leads
+to the arena; the trophy needs the arena win PLUS the whole race ladder,
+via `claimVictory`), incl. fresh-run cursor = stage 1, unlocks kept,
+always-open arena node. Run it
 after ANY edit to `levels.js`, `hero.js`, `game.js` or `rivals.js`.
 
 ## Architecture
@@ -64,15 +71,15 @@ after ANY edit to `levels.js`, `hero.js`, `game.js` or `rivals.js`.
 | File | Responsibility |
 |---|---|
 | `js/main.js` | boot, state routing (`title/select/map/play/pause/clear/dq/lost/over/win/victory`), fixed 60 Hz loop, key routing (incl. the survival throttle axis), progress + arena-best persistence, resize, SW registration (never on localhost) |
-| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic (gated stages + the always-open arena node); coin/checkpoint/respawn/finish/placement rules; time-limit DQ (`state === 'dq'`, tick sfx) and placement gates (`passPlace` → `state === 'lost'`); applies hazards/wind/bounce to the hero (and crumble removal); **survival mode** (`stepSurvival`: `arenaStep` waves, shrinking ring, knockback-only hits, `over`/`win` endings); `hazardsOff`/`gatesOff` flags for geometry-only bots; `sfx()` no-op hook injected by main. **No DOM, no three** |
-| `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags, damage model (`hurt()` → hearts, `stun` lockout, knockback, 1.2s invuln, `dead` at 0; `respawn()` = full heal + 0.5s grace; falls are always instant deaths). **`free = true` switches to two-axis control** (flags.z drives forward/back, friction brakes both axes — the survival arena; race paths never set it). `speed`/`jump`/`hp`/`steer`/`airCtrl`/`floaty` define each hero. `HERO_RADIUS`/`HERO_HALF` are the size source of truth. **No three** |
-| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme, timeLimit, passPlace, mode?}]` + shared kit: ground/step/coin/**decor** (solid trunks & rocks, always ≥1m off-lane)/**wall** (real blocking collider — chicanes, gate frames); hazards: hammer (physical turnstile, `len` scales reach), pendulum/roller/piston (**knockback sensors — no collider**; rollers sweep x or z via `ax`), gates (**portcullis**: kinematic collider that slams/lifts on a cycle), crumble (fixed slab removed on give-way), bounce pad + wind zones (pure zones); `courseStep()` animates everything, `hazardTouch()` returns a knock vector, `windAt()` lateral push. Sunny Shore (gentle) → Sunset Ridge v2 (**canyon weave** of alternating walls, **portcullis** queue-gate, **the Needle** single-file throat + double pendulum, piston, crosswind ledge, crumble crossing, pillars) → **Bumper Arena** (`mode:'survival'`: disc floor, `ARENA` constants, `arenaStep()` with wave-gated hazards + ramping tempo + own phase accumulators). **No three** |
+| `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic (gated stages + the always-open arena node); coin/checkpoint/respawn/finish/placement rules; time-limit DQ (`state === 'dq'`, tick sfx) and placement gates (`passPlace` → `state === 'lost'`); applies hazards/wind/bounce to the hero (and crumble removal), collects speed pickups for every runner (boosts/curses, `pickupsOff` flag); **survival mode** (`stepSurvival`: `arenaStep` waves, shrinking ring, hits cost a heart off a flat 4-pool + knockback, `over`/`win` endings); `claimVictory()` = the trophy gate (arena win + `allRacesCleared()`); `hazardsOff`/`gatesOff` flags for geometry-only bots; `sfx()` no-op hook injected by main. **No DOM, no three** |
+| `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags, damage model (`hurt()` → hearts, `stun` lockout, knockback, 1.2s invuln, `dead` at 0; `respawn()` = full heal + 0.5s grace; falls are always instant deaths). **`free = true` switches to two-axis control** (flags.z drives forward/back, friction brakes both axes — the survival arena; race paths never set it). `speed`/`jump`/`hp`/`steer`/`airCtrl`/`floaty` define each hero; speed-pickup modifiers via `applyMod(±1)` (`mod`/`modT`/`modGot`, ground-only `speedMul`). `HERO_RADIUS`/`HERO_HALF` are the size source of truth. **No three** |
+| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme, timeLimit, passPlace, mode?}]` + shared kit: ground/step/coin/**decor** (solid trunks & rocks, always ≥1m off-lane)/**wall** (real blocking collider — chicanes, gate frames); hazards: hammer (physical turnstile, `len` scales reach), pendulum/roller/piston (**knockback sensors — no collider**; rollers sweep x or z via `ax`), gates (**portcullis**: kinematic collider that slams/lifts on a cycle), crumble (fixed slab removed on give-way), bounce pad + wind zones (pure zones); `courseStep()` animates everything — called with `hero = null` (Game's `hazardsOff`) it PARKS all moving hazard bodies at y −40 — `hazardTouch()` returns a knock vector, `windAt()` lateral push. Speed pickups are plain data on the course: `boosts`/`curses` `[{x, y, z, taken}]`. Sunny Shore v2 (gentle, but now with a first 3.6m **chicane gate**, a slow roller + counter-phase pendulum duet on the back straight, and the boost/jinx debut) → Sunset Ridge v2 (**canyon weave** of alternating walls, **portcullis** queue-gate, **the Needle** single-file throat + double pendulum, piston, crosswind ledge, crumble crossing, pillars) → **Bumper Arena** (`mode:'survival'`: disc floor, `ARENA` constants, `arenaStep()` with wave-gated hazards + ramping tempo + own phase accumulators). **No three** |
 | `js/rivals.js` | 3 autopiloted `Player` instances (speed = chosen hero's speed × {1.10, 0.98, 0.87} + their own jump copy, lanes, jitter, vault-if-blocked, checkpoint respawn); `placement()` for the HUD. Solid kinematic capsules — shoving works; they eat hazard knockback too (hp 99 = stumble, never die). Netcode seam: inputs → determinate sim. **No three** |
-| `js/audio.js` | WebAudio synth: SFX (jump/land/spin/coin/checkpoint/fall/clear/trophy/menu/hit/die/bounce/tick/gameover) + one original chiptune loop per stage, ducked on pause; `pixelbros3d_mute`; unlock on first gesture |
+| `js/audio.js` | WebAudio synth: SFX (jump/land/spin/coin/checkpoint/fall/clear/trophy/menu/hit/die/bounce/tick/gameover/boost/jinx) + one original chiptune loop per stage, ducked on pause; `pixelbros3d_mute`; unlock on first gesture |
 | `js/phys.js` | Rapier init + world factory; `STEP = 1/60` |
 | `js/renderer.js` | three.js scene: lights/shadows/fog/sea, per-level THEMES applied by `buildCourse`, course meshes incl. walls/portcullis gates/arena disc + closing ring (parked hazards stay hidden), hero rig, rival meshes (`setRivals`), map diorama (grows with `LEVELS`, arena island gets a ring stage), follow/menu/map/tower cameras — all run-world states keep the hero posed + camera live (terminal cards never freeze the scene) |
 | `js/models.js` | procedural hero builder (boxes), `style` variants cap/keffiyeh/fletch |
-| `js/ui.js` | DOM screens (title/select/HUD+place+hearts+countdown / survival HUD (wave + survive-countdown)/pause/clear/**dq**/**lost**/**over**/**win**/map/victory) with `data-key` re-render on language change; timer turns gold <25% and pulses red <10% of the limit; 1st place makes the clear trophy glow gold |
+| `js/ui.js` | DOM screens (title/select/HUD+place+hearts+countdown / survival HUD (wave + survive-countdown + hearts)/pause/clear/**dq**/**lost**/**over**/**win**/map/victory) with `data-key` re-render on language change; timer turns gold <25% and pulses red <10% of the limit; 1st place makes the clear trophy glow gold; the win card locks the trophy (line + button) until `allRacesCleared`; `selectHeroPx()` publishes the split-screen showcase anchor (center of the stage half, from the live `#hero-anchor` rect, RTL-mirrored) for the renderer |
 | `js/i18n.js` | en/ar tables, `t()`, `L` toggle, `<html lang/dir>`; `pixelbros3d_lang` |
 | `js/input.js` | keyboard + virtual keys, edge triggers, `endFrame()` — ported 1:1 from 2D |
 | `js/view.js` | viewport metrics: dpr cap 2, portrait/coarse flags |
@@ -143,16 +150,20 @@ behind `typeof`), so they run under plain Node for headless checks.
 - Fixed 60 Hz everywhere; per-tick, deterministic, testable.
 - Auto-run along **+Z** (Crash-style); steering is one axis, jump is hold-
   for-height with a −0.45× release cut, coyote 6f, buffer 7f.
-- **Design for the worst hero**: Faris (6.6 m/s, jump 10.2) full-holds a
-  bare gap of ≈5m (keep ≤3m anyway for margin), Sahm's low jump (8.6)
-  tops out ≈1.6m — step-ups ≤ 0.7m, everything wider needs a crossing
-  within reach. Headless enforces: **every hero × every level must fully
-  clear, death-free** (bots run `hazardsOff` — geometry & pace only).
-- **Balance law (headless-enforced)**: clear-time spread across the whole
-  roster per level ≤ **1.40×** (speeds live at 6.6–8.4 m/s — bold but
-  bounded; every distinction has a cost: Bolt understeers in air, Sahm
-  has brake-slip + 1 heart, Faris trades speed for 3 hearts + sharp
-  cuts). Race fairness comes from RIVALS SCALING to your pick
+- **Design for the worst hero**: slowest hero Faris (7.1 m/s, jump 10.2)
+  full-holds a bare gap of ≈5m (keep ≤3m anyway for margin), the lowest
+  jump on the roster (Scoozy, 9.4) tops out ≈1.7m — step-ups ≤ 0.7m,
+  everything wider needs a crossing within reach. Headless enforces:
+  **every hero × every level must fully clear, death-free** (bots run
+  `hazardsOff` — geometry & pace only; `courseStep` then PARKS every
+  moving hazard body at y −40, because the hammer and portcullis are
+  real colliders and would otherwise body-check bots at random phases).
+- **Balance law (headless-enforced)**: roster speeds live in a strict
+  5% band (7.1–7.45 m/s, max/min ≤ 1.05) and clear-time spread per level
+  ≤ **1.12×**. Nobody outruns anybody — identity lives in grip, ignition,
+  jump arc and hearts (Faris = 3♥ tank + sharp cuts, Scoozy = near-zero
+  friction, Ghzl = floaty mega-jump, Shararah = best ignition, Duha =
+  air control). Race fairness comes from RIVALS SCALING to your pick
   (`speedMul` ratios), not from identical stats.
 - **Ways to lose**: four terminal run states — **time limit** (out of
   time → `dq` → DISQUALIFIED card), **placement gate** (`lost` card):
@@ -165,8 +176,10 @@ behind `typeof`), so they run under plain Node for headless checks.
   `game.gatesOff` (+ `hazardsOff`) — geometry tests ≠ race tests.
   Limits stay generous: headless asserts `timeLimit ≥ 1.6× slowest bot
   clear` (Shore 45s, Ridge 90s). Survival mode ends differently:
-  **`over`** (the ring swallows you — splash card with survive-time +
-  best) and **`win`** (90s alive — LAST STANDING card).
+  **`over`** (the ring swallows you OR the heart pool empties — splash
+  card with survive-time + best) and **`win`** (60s alive — LAST STANDING
+  card; the trophy screen itself lives behind `claimVictory`, see the
+  arena bullet).
 - **Hazard placement law**: hazards must always have a safe moment (they
   oscillate) and never require stopping inside a hazard; place knockback
   hazards on wide ground/shoulders, never where a hit drops you into an
@@ -203,33 +216,59 @@ behind `typeof`), so they run under plain Node for headless checks.
   feet offset derives from `HERO_HALF + HERO_RADIUS`, never hardcoded.
 - **Adventure flow**: title → select → map (3D diorama, three islands —
   two race stages + the arena — hero walks node-to-node, ◀ ▶ replay
-  cleared stages) → run → clear → map → … → victory card. Frontier
+  cleared stages) → run → clear → map → … Clearing a race stage always
+  walks the hero to the NEXT node (Ridge's next stop is the arena);
+  the trophy (`victory`) card is the arena's prize — `claimVictory()`
+  raises it only when the arena is won with `allRacesCleared()` true
+  (frontier past the last race stop). Winning the arena early shows the
+  locked-line on the win card and walks back to the map. Frontier
   persists via `pixelbros3d_progress` (unlocks survive a quit) but **a
   fresh run always opens the map on stage 1** (`enterMap(true)` from the
   select screen) — the player then roams freely up to the frontier.
 - **Survival mode (`mode:'survival'` level, Bumper Arena)**: a pub
-  challenge, NOT an adventure stop — `mapMove` lets the cursor skim past
-  locked stages to reach it but never park on locked stages; clearing it
-  never advances the frontier and `isLastStage()` only counts race
-  levels. Free control (`player.free`): WASD/arrows drive both axes
-  (Space is the only jump there — W/↑ belong to the throttle), no
-  auto-run, no rivals, no hearts — hazard hits are pure knockback with
-  30f mercy, the shrinking ring (`ARENA.ringR`, 10.6m→4.6m over 90s) is
-  the kill plane, and waves every 15s un-park hazards that wait below
-  the stage (y=−40, `active=false` — `hazardTouch` skips parked ones).
-  `arenaStep` keeps per-hazard phase accumulators so the tempo ramp
-  (→1.8×) never jumps a sine. Endings: `over` (splash) / `win` (90s =
-  LAST STANDING); best time in `pixelbros3d_arena_best` (90 = full win),
-  shown on the arena's map node. The arena camera is a fixed wide tower
+  challenge, NOT a frontier stop — `mapMove` lets the cursor skim past
+  locked stages to reach it but never park on locked stages; surviving
+  it never advances the race frontier. Free control (`player.free`):
+  WASD/arrows drive both axes (Space is the only jump there — W/↑ belong
+  to the throttle), no auto-run, no rivals. Hits bite: the full `hurt()`
+  model (knockback ×1.4, tumble stun, 1.2s mercy) off a **flat
+  `ARENA.hearts` (4) pool for every hero** — leaderboard fairness beats
+  hero identity in here — and zero hearts is an `over`, same as the
+  water. The shrinking ring (`ARENA.ringR`, 10.6m→4.6m over `ARENA.dur`
+  = 60s) is the other kill plane; waves every 10s un-park hazards that
+  wait below the stage (y=−40, `active=false` — `hazardTouch` skips
+  parked ones). `arenaStep` keeps per-hazard phase accumulators so the
+  tempo ramp (→1.8×) never jumps a sine. Endings: `over` (splash) /
+  `win` (60s = LAST STANDING); best time in `pixelbros3d_arena_best`
+  (60 = full win), shown on the arena's map node. The hearts show top
+  center (`ui.hudSurvive`). The arena camera is a fixed wide tower
   shot — fixed yaw keeps WASD screen-true.
-- **Roster (9 heroes)**: the originals plus Dolar (7.4/10.6/2♥, silver
-  hustler), Hero (7.0/11.2/2♥, indigo everyman), Scoozy (8.3/9.4/1♥,
-  magenta, low-friction "on wheels") and Glorious (6.9/10.8/3♥, gold
-  tank with the `crown` style). Adding a hero = one `CHARACTERS` entry
-  + name/blurb in **both** i18n tables — select carousel, stat bars,
-  rival speed-scaling and diorama colors all pick it up; keep the stat
-  inside the fairness envelope (speed 6.6–8.4, jump 8.6–12.6, hp 1–3)
-  or the fair-band test will say so.
+- **Roster (10 heroes)**: Hero (7.2/11.2/2♥ indigo everyman), Shararah
+  (7.45/10.4/1♥ ember spark, best ignition + steer), Yas (7.3/11.0/2♥
+  steady green — she/her), Ghzl (7.35/12.0/1♥ orchid floaty spinner,
+  she/her), Wafaa (7.3/11.0/2♥ teal, loyal clutch grip: high friction +
+  steer), Duha (7.2/11.6/2♥ sunrise-cream air glider, she/her), Dolar
+  (7.25/10.6/2♥ silver hustler), Scoozy (7.45/9.4/1♥ electric cyan,
+  near-zero friction "on wheels"), Faris (7.1/10.2/3♥ bone keffiyeh
+  tank), Glorious (7.15/10.8/3♥ gold crown tank). Speeds sit in a strict
+  5% band — see the balance law. Yas, Ghzl, Duha and Wafaa are female —
+  keep blurbs' pronouns right in BOTH languages (the Arabic forms take
+  feminine agreement too). Adding a hero = one `CHARACTERS` entry +
+  name/blurb in **both** i18n tables — select carousel, stat bars, rival
+  speed-scaling and diorama colors all pick it up; keep the stat inside
+  the fairness envelope (speed 7.1–7.45, jump 9.4–12.0, hp 1–3) or the
+  band tests will say so.
+- **Speed pickups (race stages only)**: `course.boosts` (gold arrow ring,
+  ground speed ×1.28 for 3.5s) and `course.curses` (purple blob, ×0.68
+  for 2.5s) are proximity sensors collected in `game.step` — **every**
+  runner triggers them, hero and rivals alike (symmetric chaos; the bot
+  band runs set `game.pickupsOff`). `Player.applyMod(±1)` latches
+  `mod`/`modT`; a new pickup replaces the old one (no stacking), respawn
+  washes it off, and the multiplier applies on the GROUND ONLY — once
+  you're airborne it's the honest base envelope, so no jinx can ever make
+  a gap unjumpable and the reachability proofs stay valid. Visuals:
+  pulsing foot-ring aura on the hero (gold/purple); SFX `boost`/`jinx`.
+  Arena ships zero pickups — the closing ring is punishment enough.
 - Controls: `L` language, `M` mute, `ESC` pause, `R` retry, `Q` title.
   Audio unlocks on first gesture; music ducks while paused.
 - UI text goes through `t('key')` with entries in **both** en and ar
@@ -270,12 +309,35 @@ behind `typeof`), so they run under plain Node for headless checks.
    survival **Bumper Arena** (3rd map node, always open: free control,
    closing ring, 6 escalating waves, `over`/`win` endings, best time
    persisted), rivals stress-tested live on the new gauntlet.
-7. Badges/relics: time trial tiers + all-coins challenge, shown on the
+7. **Heroes, Sparks & Jinxes wave** ✅: roster swap (Shararah, Yas, Ghzl
+   and Duha join Hero, Dolar, Scoozy, Faris and Glorious; Rosso, Bolt,
+   Aqua and Sahm retire) under a strict **5% speed law** — identity
+   moves to grip, ignition, jump arc and hearts; **speed pickups** on
+   both race stages (gold boost rings ×1.28, purple jinx orbs ×0.68,
+   ground-only, rivals share them); **Sunny Shore v2** (first 3.6m
+   chicane gate, slow roller + counter-phase pendulum on the back
+   straight); `courseStep` parks moving hazards for geometry-only bots;
+   fair band tightened to 1.12×, speed-ratio guard 1.05.
+8. **Hearts, Trophy & Showtime wave** ✅: Yas/Ghzl/Duha presented as the
+   women they are (pronouns fixed in both languages) joined by **Wafaa**
+   (وفاء — teal, loyal clutch grip) as the 10th hero; Scoozy recolors
+   from pink to electric cyan; clearing the last race stage now walks
+   the hero to the ARENA node — the trophy became the arena prize
+   (`claimVictory` = arena win + all stages cleared, win card shows the
+   lock); the arena compressed 90s→60s (waves every 10s) and hits now
+   bite — flat 4-heart pool, hearts on the survival HUD, zero = over;
+   the select screen is a split layout: half 1 = a grid of mini cards
+   (click or ◀ ▶ to pick, ENTER/PLAY to proceed), half 2 = the rotating
+   3D hero centered in its half at screen mid-height via a live
+   #hero-anchor rect (RTL mirrors with the DOM; the renderer solves the
+   hero's BODY CENTER onto the anchor so the orbit cam keeps it pinned);
+   name/blurb/stat bars ride a glass strip under the showcase.
+9. Badges/relics: time trial tiers + all-coins challenge, shown on the
    clear screen; best times via localStorage.
-8. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
+10. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
    `gen-icons.mjs` pattern), GitHub Pages deploy for the new
    `superpixelbros/super-pixel-bros-3d` repo (enabled — pending).
-9. More levels (`LEVELS` entries + diorama nodes grow automatically) —
+11. More levels (`LEVELS` entries + diorama nodes grow automatically) —
    stage 3 sketch: "Storm Foundry" (pistons + conveyors + boulder chase).
 
 ## Ideas that fit

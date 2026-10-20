@@ -26,22 +26,27 @@ export class UI {
       </div>
 
       <div class="screen hidden" id="sc-select">
-        <div class="topbar">
-          <h2 data-key="choose_hero"></h2>
-        </div>
-        <div class="select-row">
-          <button class="btn round" id="b-prev">◀</button>
-          <div class="hero-card panel">
-            <div class="hero-dot" id="hero-dot"></div>
-            <h3 id="hero-name"></h3>
-            <p id="hero-blurb" class="blurb"></p>
-            <div class="stat"><span data-key="spd"></span><div class="bar"><i id="bar-spd"></i></div></div>
-            <div class="stat"><span data-key="jmp"></span><div class="bar"><i id="bar-jmp"></i></div></div>
+        <div class="select-wrap">
+          <div class="pick-half">
+            <h2 class="pick-title" data-key="choose_hero"></h2>
+            <div class="hero-grid" id="hero-grid"></div>
+            <div class="pick-bar">
+              <button class="btn round" id="b-prev">◀</button>
+              <button class="btn big accent" id="b-play" data-key="btn.play"></button>
+              <button class="btn round" id="b-next">▶</button>
+            </div>
+            <p class="keys dim" data-key="select_hint"></p>
           </div>
-          <button class="btn round" id="b-next">▶</button>
+          <div class="stage-half">
+            <div id="hero-anchor"></div>
+            <div class="hero-info panel">
+              <h3 id="hero-name"></h3>
+              <p id="hero-blurb" class="blurb"></p>
+              <div class="stat"><span data-key="spd"></span><div class="bar"><i id="bar-spd"></i></div></div>
+              <div class="stat"><span data-key="jmp"></span><div class="bar"><i id="bar-jmp"></i></div></div>
+            </div>
+          </div>
         </div>
-        <button class="btn big accent" id="b-play" data-key="btn.play"></button>
-        <p class="keys dim" data-key="select_hint"></p>
       </div>
 
       <div class="hud hidden" id="sc-hud">
@@ -124,7 +129,8 @@ export class UI {
           <h2 data-key="win.title"></h2>
           <p class="trophy-sub" data-key="win.sub"></p>
           <p class="result" id="win-best"></p>
-          <button class="btn big accent" id="b-win-title" data-key="win.hint"></button>
+          <p class="blurb" id="win-locked" data-key="win.locked"></p>
+          <button class="btn big accent" id="b-win-title" data-key="win.hint_map"></button>
         </div>
       </div>
 
@@ -167,11 +173,21 @@ export class UI {
     this.bind('b-lost-title', () => this.cb.onTitle());
     this.bind('b-over-retry', () => this.cb.onRetry());
     this.bind('b-over-title', () => this.cb.onTitle());
-    this.bind('b-win-title', () => this.cb.onTitle());
+    this.bind('b-win-title', () => this.cb.onWinDone());
     this.bind('b-victory', () => this.cb.onTitle());
     this.bind('b-map-prev', () => this.cb.onMapMove(-1));
     this.bind('b-map-next', () => this.cb.onMapMove(1));
     this.bind('b-map-play', () => this.cb.onMapPlay());
+    // select grid: one mini card per hero; click = pick (ENTER still = go)
+    const grid = this.root.querySelector('#hero-grid');
+    grid.innerHTML = HERO_IDS.map((id, i) => `
+      <button class="hcard" data-i="${i}" style="--c:${heroColorCss(id)}">
+        <span class="hdot"></span><span class="hname"></span>
+      </button>`).join('');
+    grid.addEventListener('click', (e) => {
+      const c = e.target.closest('.hcard');
+      if (c) this.cb.onPick(+c.dataset.i);
+    });
     onLangChange(() => this.renderTexts());
     this.renderTexts();
   }
@@ -184,6 +200,11 @@ export class UI {
   renderTexts() {
     this.root.querySelectorAll('[data-key]').forEach((el) => {
       el.textContent = t(el.dataset.key);
+    });
+    // grid card names live in JS (one per hero, i18n-driven)
+    this.root.querySelectorAll('#hero-grid .hcard').forEach((el) => {
+      el.querySelector('.hname').textContent =
+        t(`hero.${HERO_IDS[+el.dataset.i]}.name`);
     });
     this.setHero(this.heroIndex);
   }
@@ -202,17 +223,41 @@ export class UI {
     }
   }
 
+  // select-screen anchor: the exact center of the stage half (screen
+  // center vertically, that half's center horizontally). The renderer
+  // parks the rotating hero's body center on it; the live DOM rect means
+  // RTL mirroring comes for free (the halves swap with <html dir>).
+  selectHeroPx() {
+    const a = this.root.querySelector('#hero-anchor').getBoundingClientRect();
+    const s = this.root.querySelector('.stage-half').getBoundingClientRect();
+    return {
+      px: a.left + a.width / 2,
+      py: a.top + a.height / 2,
+      room: s.width * 0.85,
+    };
+  }
+
   setHero(index) {
     this.heroIndex = index;
     const id = HERO_IDS[index];
-    this.root.querySelector('#hero-dot').style.background = heroColorCss(id);
-    this.root.querySelector('#hero-name').textContent = t(`hero.${id}.name`);
+    // grid: glow the chosen card, keep it in view on small screens
+    this.root.querySelectorAll('#hero-grid .hcard').forEach((el) => {
+      const on = +el.dataset.i === index;
+      el.classList.toggle('sel', on);
+      if (on) el.scrollIntoView({ block: 'nearest' });
+    });
+    const name = this.root.querySelector('#hero-name');
+    name.textContent = t(`hero.${id}.name`);
+    name.style.color = heroColorCss(id);
     this.root.querySelector('#hero-blurb').textContent = t(`hero.${id}.blurb`);
     const d = CHARACTERS[id];
+    // bars compare within the CURRENT roster envelope (speed 7.1–7.45,
+    // jump 9.4–12.0) — the old 8.4/12.6 divisors flattened everyone into
+    // a bar, which sells the 5% speed law short
     this.root.querySelector('#bar-spd').style.width =
-      Math.round((d.speed / 8.4) * 100) + '%';
+      Math.round(((d.speed - 6.8) / 0.9) * 100) + '%';
     this.root.querySelector('#bar-jmp').style.width =
-      Math.round((d.jump / 12.6) * 100) + '%';
+      Math.round(((d.jump - 9.0) / 3.2) * 100) + '%';
   }
 
   hud(coins, coinTotal, timeSec, place, hp = 1, maxHp = 1, limit = 0) {
@@ -241,13 +286,16 @@ export class UI {
     } else hearts.style.visibility = 'hidden';
   }
 
-  // survival HUD: coins/place retire, the wave counter and a count-DOWN to
-  // the 90s Last-Standing buzzer take over
-  hudSurvive(timeSec, wave, dur) {
+  // survival HUD: coins/place retire, the wave counter, a count-DOWN to
+  // the Last-Standing buzzer and the arena heart pool take over
+  hudSurvive(timeSec, wave, dur, hp = 1, maxHp = 1) {
     const r = this.root;
     r.querySelector('#hud-coins').style.visibility = 'hidden';
     r.querySelector('#hud-place').style.visibility = 'hidden';
-    r.querySelector('#hud-hearts').style.visibility = 'hidden';
+    const hearts = r.querySelector('#hud-hearts');
+    hearts.style.visibility = 'visible';
+    hearts.textContent = '♥'.repeat(Math.max(0, hp))
+      + '♡'.repeat(Math.max(0, maxHp - hp));
     const timeEl = r.querySelector('#hud-time');
     const rem = dur - timeSec;
     timeEl.textContent = t('hud.survive', { t: fmtTime(Math.max(0, rem)) });
@@ -266,9 +314,16 @@ export class UI {
       bestSec > 0 ? t('over.best', { t: fmtTime(bestSec) }) : '';
   }
 
-  winStats(bestSec) {
+  // win card: the trophy gleams only once the race ladder is done — until
+  // then a locked line says what is still owed, and the button walks back
+  winStats(bestSec, allClear) {
     this.root.querySelector('#win-best').textContent =
       t('over.newbest') + '  ' + t('over.best', { t: fmtTime(bestSec) });
+    this.root.querySelector('#win-locked').style.display =
+      allClear ? 'none' : '';
+    const b = this.root.querySelector('#b-win-title');
+    b.dataset.key = allClear ? 'win.hint_trophy' : 'win.hint_map';
+    b.textContent = t(b.dataset.key);
   }
 
   clearStats(timeSec, coins, coinTotal, hasNext, place) {

@@ -15,7 +15,7 @@ import audio from './audio.js';
 
 const STEP_MS = STEP * 1000;
 const PROGRESS_KEY = 'pixelbros3d_progress';
-const BEST_KEY = 'pixelbros3d_arena_best';   // survival record (seconds, 90 = win)
+const BEST_KEY = 'pixelbros3d_arena_best';   // survival record (ARENA.dur = win)
 
 async function boot() {
   measure();
@@ -48,6 +48,7 @@ async function boot() {
   const ui = new UI(uiRoot, {
     onStart: toSelect,
     onMove: (d) => { game.moveCursor(d); ui.setHero(game.heroIndex); },
+    onPick: (i) => { game.heroIndex = i; ui.setHero(i); audio.sfx('select'); },
     onPlay: toMap,
     onResume: resume,
     onRetry: () => startLevel(game.levelIndex),
@@ -55,6 +56,7 @@ async function boot() {
     onMapMove: (d) => { game.mapMove(d); audio.sfx('select'); updateMapUI(); },
     onMapPlay: () => startLevel(game.map.cursor),
     onDone: handleDone,
+    onWinDone: winDone,
   });
 
   const rotateEl = document.getElementById('rotate');
@@ -105,12 +107,23 @@ async function boot() {
     ui.show(game.state);
     ui.setHero(game.heroIndex);
   }
-  // ENTER on the clear card: walk the map onward, or take the trophy
+  // ENTER on the clear card: the hero walks onward — every race stage has
+  // a next node now (Ridge's leads to the arena), no trophy before then
   function handleDone() {
-    const r = game.advanceFrontier();
+    game.advanceFrontier();
     saveProgress();
-    if (r === 'victory') { audio.sfx('trophy'); ui.show('victory'); }
-    else {
+    audio.sfx('confirm');
+    renderer.setHero('map:' + game.selectedHero());
+    ui.show('map');
+    updateMapUI();
+  }
+  // ENTER on the arena's win card: trophy if the race ladder is done,
+  // otherwise back to the map — the locked card already said what is owed
+  function winDone() {
+    if (game.claimVictory() === 'victory') {
+      audio.sfx('trophy');
+      ui.show('victory');
+    } else {
       audio.sfx('confirm');
       renderer.setHero('map:' + game.selectedHero());
       ui.show('map');
@@ -170,7 +183,7 @@ async function boot() {
       if (Input.pressed('Enter')) startLevel(game.levelIndex);
       if (Input.pressed('KeyQ')) toTitle();
     } else if (s === 'win') {
-      if (Input.pressed('Enter')) toTitle();
+      if (Input.pressed('Enter')) winDone();
     }
   }
 
@@ -204,13 +217,17 @@ async function boot() {
       acc -= STEP_MS;
     }
 
-    // menu shows the live hero on the pedestal; map shows the tiny one
+    // menu shows the live hero on the pedestal; select slides it beside
+    // the card, map shows the tiny one
     if (game.state === 'title' || game.state === 'select') {
       renderer.setHero('menu:' + game.selectedHero());
+      renderer.setSelectHero(
+        game.state === 'select' ? ui.selectHeroPx() : null);
     }
     if (game.state === 'play' && game.player) {
       if (game.mode === 'survival') {
-        ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur);
+        ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur,
+          game.player.hp, game.player.maxHp);
       } else {
         ui.hud(game.coins, game.course.coinTotal, game.timeF / 60,
           placement(game), game.player.hp, game.player.maxHp, game.timeLimit);
@@ -218,8 +235,10 @@ async function boot() {
     }
     if (game.state === 'clear') {
       ui.show('clear');
+      // every race stage now leads onward (Ridge → arena), so the card
+      // always offers "next island"
       ui.clearStats(game.clearTime, game.coins, game.course.coinTotal,
-        !game.isLastStage(), game.clearPlace);
+        true, game.clearPlace);
     }
     if (game.state === 'dq') ui.show('dq');
     if (game.state === 'lost') {
@@ -230,7 +249,7 @@ async function boot() {
       if (!survSaved) { survSaved = true; saveSurvBest(game.survTime); }
     }
     if (game.state === 'over') { ui.show('over'); ui.overStats(game.survTime, survBest); }
-    if (game.state === 'win') { ui.show('win'); ui.winStats(survBest); }
+    if (game.state === 'win') { ui.show('win'); ui.winStats(survBest, game.allRacesCleared()); }
 
     renderer.sync(game, game.state);
     renderer.render();

@@ -65,8 +65,19 @@ export class Renderer {
 
     this.buildDiorama();
 
-    this.heroKey = null;   // 'play:rosso' | 'menu:rosso' | 'map:rosso'
+    // pickup-modifier aura: a pulsing foot ring under the hero while a
+    // boost or jinx runs — gold vs bruise purple, invisible when clean
+    this.modRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.6, 0.05, 6, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffd23e, transparent: true, opacity: 0.9 })
+    );
+    this.modRing.rotation.x = Math.PI / 2;
+    this.modRing.visible = false;
+    this.scene.add(this.modRing);
+
+    this.heroKey = null;   // 'play:hero' | 'menu:hero' | 'map:hero'
     this.heroParts = null;
+    this.selectHero = null; // select-screen anchor { px, py, room } | null
     this.menuAngle = 0;
     this.camPos = new THREE.Vector3(0, 3, -9);
     this.camLook = new THREE.Vector3(0, 1.2, 0);
@@ -201,6 +212,24 @@ export class Renderer {
       ), c.x, c.y, c.z);
       this.coinMeshes.push(m);   // no castShadow: 25 spinners in the depth pass is pure cost
     }
+
+    // speed pickups: golden boost rings with an up-arrow + brooding purple
+    // jinx blobs. No colliders — the game layer picks them up by proximity.
+    const boostMat = new THREE.MeshLambertMaterial({
+      color: 0xffd23e, emissive: 0x7a5200,
+    });
+    this.boostMeshes = course.boosts.map((u) => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(new THREE.TorusGeometry(0.52, 0.08, 8, 22), boostMat));
+      g.add(new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.34, 4), boostMat));
+      return add(g, u.x, u.y, u.z);
+    });
+    const jinxMat = new THREE.MeshLambertMaterial({
+      color: 0x8a3fb0, emissive: 0x2d0b45,
+    });
+    this.jinxMeshes = course.curses.map((u) => add(
+      new THREE.Mesh(new THREE.IcosahedronGeometry(0.36, 0), jinxMat),
+      u.x, u.y, u.z));
 
     this.hammerMeshes = course.hammers.map((h) => {
       const g = new THREE.Group();
@@ -347,9 +376,11 @@ export class Renderer {
   }
 
   // ---- hero mesh ---------------------------------------------------------
+  // select-screen showcase anchor in CSS px (+ free room); null → center
+  setSelectHero(anchor) { this.selectHero = anchor; }
+
   setHero(key) {
-    if (key === this.heroKey) return;
-    if (this.heroParts) {
+    if (key === this.heroKey) return;    if (this.heroParts) {
       this.heroParts.group.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
         if (o.material) o.material.dispose();
@@ -357,7 +388,7 @@ export class Renderer {
       this.scene.remove(this.heroParts.group);
     }
     const [mode, id] = key.split(':');
-    const def = CHARACTERS[id] || CHARACTERS.rosso;
+    const def = CHARACTERS[id] || CHARACTERS.hero;
     this.heroParts = buildHero(def);
     // 10% smaller in play; menu showcase full size; map diorama tiny
     const scale = mode === 'play' ? 0.9 : mode === 'map' ? 0.45 : 1;
@@ -385,6 +416,24 @@ export class Renderer {
         m.visible = !c.taken;
         m.rotation.y = t * 3;
         m.position.y = c.y + Math.sin(t * 2 + c.z) * 0.08;
+      }
+    }
+    if (this.boostMeshes) {
+      let i = 0;
+      for (const u of (game.course ? game.course.boosts : [])) {
+        const m = this.boostMeshes[i++];
+        if (!m) continue;
+        m.visible = !u.taken;
+        m.rotation.z = t * 1.4;
+        m.position.y = u.y + Math.sin(t * 2.4 + u.z) * 0.1;
+      }
+      i = 0;
+      for (const u of (game.course ? game.course.curses : [])) {
+        const m = this.jinxMeshes[i++];
+        if (!m) continue;
+        m.visible = !u.taken;
+        m.rotation.set(t * 0.9, t * 1.3, 0);
+        m.position.y = u.y + Math.sin(t * 1.6 + u.z) * 0.07;
       }
     }
     if (game.course) {
@@ -455,6 +504,15 @@ export class Renderer {
       }
     }
 
+    // pickup aura trails the hero while a boost/jinx runs
+    const aura = !!p && p.modT > 0;
+    this.modRing.visible = aura;
+    if (aura) {
+      this.modRing.position.set(p.pos.x, p.pos.y - FEET + 0.08, p.pos.z);
+      this.modRing.material.color.setHex(p.mod > 0 ? 0xffd23e : 0x8a3fb0);
+      this.modRing.scale.setScalar(1 + Math.sin(t * 9) * 0.12);
+    }
+
     // rivals race only inside the course world
     this.rivalGroup.visible = (state === 'play' || state === 'pause'
       || state === 'clear' || state === 'dq' || state === 'lost'
@@ -473,10 +531,33 @@ export class Renderer {
       }
     }
 
-    // menu hero idles on the pedestal, slowly turning
+    // menu hero idles on the pedestal, slowly turning; on the select
+    // screen it slides to the free side of the hero card (RTL mirrored)
+    // and the pedestal follows. The menu cam ORBITS, so the UI pixel is
+    // re-solved against the ground plane every frame — the hero stays
+    // glued to its screen column beside the card while the world swings.
     if (!p && this.heroParts && state !== 'map') {
       const hp = this.heroParts.group;
-      hp.position.set(0, 0.42 + Math.sin(t * 2) * 0.02, -14);
+      const sel = state === 'select' ? this.selectHero : null;
+      let px2 = 0, pz = -14, sc = 1;
+      if (sel) {
+        sc = Math.max(0.8, Math.min(1.4, sel.room / 340));
+        const v = new THREE.Vector3(
+          (sel.px / view.w) * 2 - 1,
+          -(sel.py / view.h) * 2 + 1,
+          0.5).unproject(this.cam).sub(this.cam.position);
+        // The anchor marks the BODY CENTER, not the feet: solve for the
+        // ground spot whose raised center sits on the anchor pixel
+        const tt = (1.08 * sc - this.cam.position.y) / v.y;
+        if (tt > 0.01) {
+          px2 = this.cam.position.x + v.x * tt;
+          pz = this.cam.position.z + v.z * tt;
+        }
+      }
+      hp.scale.setScalar(sc);
+      this.pedestal.scale.setScalar(sc);
+      this.pedestal.position.set(px2, 0.21 * sc, pz);
+      hp.position.set(px2, 0.42 * sc + Math.sin(t * 2) * 0.02, pz);
       hp.rotation.y = t * 0.7;
       const s = Math.sin(t * 4) * 0.12;   // tiny ready-bounce
       this.heroParts.armL.rotation.x = s;
