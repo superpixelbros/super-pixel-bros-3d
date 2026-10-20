@@ -49,6 +49,7 @@ export class UI {
         <div class="hud-box" id="hud-place"></div>
         <div class="hud-box" id="hud-hearts"></div>
         <div class="hud-box" id="hud-time"></div>
+        <div class="hud-box" id="hud-wave"></div>
       </div>
 
       <div class="screen hidden" id="sc-pause">
@@ -102,6 +103,31 @@ export class UI {
         </div>
       </div>
 
+      <div class="screen hidden" id="sc-over">
+        <div class="panel card dq">
+          <div class="dq-mark">🌊</div>
+          <h2 data-key="over.title"></h2>
+          <p class="blurb" data-key="over.sub"></p>
+          <p class="result" id="over-time"></p>
+          <p class="result" id="over-best"></p>
+          <div class="col">
+            <button class="btn big accent" id="b-over-retry" data-key="over.retry"></button>
+            <button class="btn ghost" id="b-over-title" data-key="pause.quit"></button>
+          </div>
+          <p class="keys dim" data-key="over.hint"></p>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="sc-win">
+        <div class="panel card">
+          <div class="trophy gold">🥇</div>
+          <h2 data-key="win.title"></h2>
+          <p class="trophy-sub" data-key="win.sub"></p>
+          <p class="result" id="win-best"></p>
+          <button class="btn big accent" id="b-win-title" data-key="win.hint"></button>
+        </div>
+      </div>
+
       <div class="screen hidden" id="sc-map">
         <div class="topbar"><h2 data-key="map.title"></h2></div>
         <div class="map-panel panel">
@@ -139,6 +165,9 @@ export class UI {
     this.bind('b-dq-title', () => this.cb.onTitle());
     this.bind('b-lost-retry', () => this.cb.onRetry());
     this.bind('b-lost-title', () => this.cb.onTitle());
+    this.bind('b-over-retry', () => this.cb.onRetry());
+    this.bind('b-over-title', () => this.cb.onTitle());
+    this.bind('b-win-title', () => this.cb.onTitle());
     this.bind('b-victory', () => this.cb.onTitle());
     this.bind('b-map-prev', () => this.cb.onMapMove(-1));
     this.bind('b-map-next', () => this.cb.onMapMove(1));
@@ -164,10 +193,11 @@ export class UI {
       title: ['sc-title'], select: ['sc-select'], play: ['sc-hud'],
       pause: ['sc-hud', 'sc-pause'], clear: ['sc-clear'], dq: ['sc-dq'],
       lost: ['sc-lost'], map: ['sc-map'], victory: ['sc-victory'],
+      over: ['sc-over'], win: ['sc-win'],
     };
     const ids = new Set(map[name] || []);
     for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear',
-      'sc-dq', 'sc-lost', 'sc-map', 'sc-victory']) {
+      'sc-dq', 'sc-lost', 'sc-map', 'sc-victory', 'sc-over', 'sc-win']) {
       this.root.querySelector('#' + id).classList.toggle('hidden', !ids.has(id));
     }
   }
@@ -186,6 +216,9 @@ export class UI {
   }
 
   hud(coins, coinTotal, timeSec, place, hp = 1, maxHp = 1, limit = 0) {
+    this.root.querySelector('#hud-wave').style.visibility = 'hidden';
+    this.root.querySelector('#hud-coins').style.visibility = 'visible';
+    this.root.querySelector('#hud-place').style.visibility = 'visible';
     this.root.querySelector('#hud-coins').textContent =
       t('hud.coins', { n: coins + ' / ' + coinTotal });
     const timeEl = this.root.querySelector('#hud-time');
@@ -206,6 +239,36 @@ export class UI {
       hearts.textContent = '♥'.repeat(hp) + '♡'.repeat(Math.max(0, maxHp - hp));
       hearts.style.visibility = 'visible';
     } else hearts.style.visibility = 'hidden';
+  }
+
+  // survival HUD: coins/place retire, the wave counter and a count-DOWN to
+  // the 90s Last-Standing buzzer take over
+  hudSurvive(timeSec, wave, dur) {
+    const r = this.root;
+    r.querySelector('#hud-coins').style.visibility = 'hidden';
+    r.querySelector('#hud-place').style.visibility = 'hidden';
+    r.querySelector('#hud-hearts').style.visibility = 'hidden';
+    const timeEl = r.querySelector('#hud-time');
+    const rem = dur - timeSec;
+    timeEl.textContent = t('hud.survive', { t: fmtTime(Math.max(0, rem)) });
+    timeEl.classList.toggle('warn', rem <= 20 && rem > 10);
+    timeEl.classList.toggle('crit', rem <= 10);
+    const w = r.querySelector('#hud-wave');
+    w.style.visibility = 'visible';
+    w.textContent = t('hud.wave', { n: wave });
+  }
+
+  overStats(timeSec, bestSec) {
+    const r = this.root;
+    r.querySelector('#over-time').textContent =
+      t('over.time', { t: fmtTime(timeSec) });
+    r.querySelector('#over-best').textContent =
+      bestSec > 0 ? t('over.best', { t: fmtTime(bestSec) }) : '';
+  }
+
+  winStats(bestSec) {
+    this.root.querySelector('#win-best').textContent =
+      t('over.newbest') + '  ' + t('over.best', { t: fmtTime(bestSec) });
   }
 
   clearStats(timeSec, coins, coinTotal, hasNext, place) {
@@ -232,11 +295,18 @@ export class UI {
       t(passPlace <= 1 ? 'lost.rule_win' : 'lost.rule_top3');
   }
 
-  setMap(num, name, cleared) {
+  setMap(num, name, cleared, opts = {}) {
     this.root.querySelector('#map-stage').textContent =
-      t('map.stage', { n: num, name });
+      opts.arena ? t('level.arena') : t('map.stage', { n: num, name });
     this.root.querySelector('#map-state').textContent =
-      cleared ? t('map.cleared') : t('map.frontier');
+      opts.arena
+        ? (opts.best > 0 ? t('over.best', { t: fmtTime(opts.best) })
+          : t('map.arena'))
+        : (cleared ? t('map.cleared') : t('map.frontier'));
+    // free-control explainer instead of the race hint while on the arena
+    const b = this.root.querySelector('#sc-map .keys');
+    b.dataset.key = opts.arena ? 'map.arenaHint' : 'map.hint';
+    b.textContent = t(b.dataset.key);
   }
 }
 

@@ -49,13 +49,15 @@ export class Rival {
     const q = p.pos;
 
     // wander around the assigned lane; course.narrows pull everyone toward
-    // the middle where the floor is thin (pillar crossings)
+    // the middle where the floor is thin — and, since a narrow may carry a
+    // centerX (gated chicanes / the Needle), into the GAP itself
     const wob = Math.sin(frame * 0.013 + this.seed) * this.rd.jitter * 0.5;
-    let lim = LANE_CLAMP;
-    for (const [z0, z1, r] of course.narrows) {
-      if (q.z > z0 && q.z < z1) lim = Math.min(lim, r);
+    let lim = LANE_CLAMP, cx = 0;
+    for (const [z0, z1, r, nx = 0] of course.narrows) {
+      if (q.z > z0 && q.z < z1 && r < lim) { lim = r; cx = nx; }
     }
-    const target = Math.max(-lim, Math.min(lim, this.rd.lane * (lim / LANE_CLAMP) + wob));
+    const target = cx + Math.max(-lim,
+      Math.min(lim, this.rd.lane * (lim / LANE_CLAMP) + wob));
     let x = 0;
     if (q.x > target + 0.45) x = -1;
     else if (q.x < target - 0.45) x = 1;

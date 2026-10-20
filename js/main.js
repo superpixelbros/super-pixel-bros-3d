@@ -7,7 +7,7 @@ import { measure, view } from './view.js';
 import { applyLang, toggleLang, t } from './i18n.js';
 import { initPhysics, STEP } from './phys.js';
 import Game from './game.js';
-import { LEVELS } from './levels.js';
+import { LEVELS, ARENA } from './levels.js';
 import { placement } from './rivals.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
@@ -15,6 +15,7 @@ import audio from './audio.js';
 
 const STEP_MS = STEP * 1000;
 const PROGRESS_KEY = 'pixelbros3d_progress';
+const BEST_KEY = 'pixelbros3d_arena_best';   // survival record (seconds, 90 = win)
 
 async function boot() {
   measure();
@@ -30,6 +31,16 @@ async function boot() {
   } catch { /* private mode: start fresh */ }
   const saveProgress = () => {
     try { localStorage.setItem(PROGRESS_KEY, String(game.frontier)); } catch { /* */ }
+  };
+  // survival best (seconds survived; ARENA.dur = the full 90s win)
+  let survBest = 0;
+  let survSaved = true;          // one-shot per survival run
+  try { survBest = parseFloat(localStorage.getItem(BEST_KEY)) || 0; } catch { /* */ }
+  const saveSurvBest = (t) => {
+    if (t <= survBest) return false;
+    survBest = t;
+    try { localStorage.setItem(BEST_KEY, String(t)); } catch { /* */ }
+    return true;
   };
 
   const renderer = new Renderer(document.getElementById('gl'));
@@ -69,11 +80,17 @@ async function boot() {
   }
   function updateMapUI() {
     const c = game.map.cursor;
-    ui.setMap(c + 1, t(LEVELS[c].nameKey), c < game.frontier);
+    const lvl = LEVELS[c];
+    if (lvl.mode === 'survival') {
+      ui.setMap(c + 1, t(lvl.nameKey), false, { arena: true, best: survBest });
+      return;
+    }
+    ui.setMap(c + 1, t(lvl.nameKey), c < game.frontier);
   }
   // (re)build a run for stage levelIndex
   function startLevel(levelIndex) {
     game.start(levelIndex);
+    survSaved = false;           // fresh survival attempt: arm the best-save
     renderer.buildCourse(game.course);
     renderer.setRivals(game.rivals);
     renderer.setHero('play:' + game.selectedHero());
@@ -103,7 +120,7 @@ async function boot() {
 
   // edge-triggered flags must fire exactly once even when a slow frame
   // runs several physics ticks
-  let jumpEdge = false, spinEdge = false;
+  let jumpEdge = false, spinEdge = false, zAxis = 0;
 
   function handleKeys() {
     const s = game.state;
@@ -123,8 +140,18 @@ async function boot() {
     } else if (s === 'play') {
       if (Input.pressed('Escape')) { game.pause(); audio.duck(true); ui.show('pause'); }
       if (Input.pressed('KeyR')) startLevel(game.levelIndex);
-      jumpEdge = Input.pressed('Space') || Input.pressed('ArrowUp') || Input.pressed('KeyW');
+      // survival: Space is the ONLY jump (W/↑ drive the free-control rig);
+      // racing: Space/W/↑ all hop
+      if (game.mode === 'survival') {
+        jumpEdge = Input.pressed('Space');
+      } else {
+        jumpEdge = Input.pressed('Space') || Input.pressed('ArrowUp') || Input.pressed('KeyW');
+      }
       spinEdge = Input.pressed('ArrowDown') || Input.pressed('KeyS') || Input.pressed('ShiftLeft');
+      // survival free-control throttle (race auto-run ignores this flag):
+      // W/↑ drives toward +Z, S/↓ backs up
+      zAxis = (Input.isDown('KeyW') || Input.isDown('ArrowUp') ? 1 : 0)
+        - (Input.isDown('KeyS') || Input.isDown('ArrowDown') ? 1 : 0);
     } else if (s === 'pause') {
       if (Input.pressed('Escape')) resume();
       if (Input.pressed('KeyR')) startLevel(game.levelIndex);
@@ -138,6 +165,11 @@ async function boot() {
       if (Input.pressed('Enter')) startLevel(game.levelIndex);
       if (Input.pressed('KeyQ')) toTitle();
     } else if (s === 'victory') {
+      if (Input.pressed('Enter')) toTitle();
+    } else if (s === 'over') {
+      if (Input.pressed('Enter')) startLevel(game.levelIndex);
+      if (Input.pressed('KeyQ')) toTitle();
+    } else if (s === 'win') {
       if (Input.pressed('Enter')) toTitle();
     }
   }
@@ -159,8 +191,11 @@ async function boot() {
       // camera faces +Z, so world +X is screen-LEFT — steering is inverted
       game.step({
         x: playing ? -Input.axisX() : 0,
+        z: playing ? zAxis : 0,
         jump: playing && jumpEdge,
-        jumpHeld: playing && (Input.isDown('Space') || Input.isDown('ArrowUp') || Input.isDown('KeyW')),
+        jumpHeld: playing && (Input.isDown('Space')
+          || (game.mode !== 'survival'
+            && (Input.isDown('ArrowUp') || Input.isDown('KeyW')))),
         spin: playing && spinEdge,
       });
       game.mapStep();
@@ -174,8 +209,12 @@ async function boot() {
       renderer.setHero('menu:' + game.selectedHero());
     }
     if (game.state === 'play' && game.player) {
-      ui.hud(game.coins, game.course.coinTotal, game.timeF / 60,
-        placement(game), game.player.hp, game.player.maxHp, game.timeLimit);
+      if (game.mode === 'survival') {
+        ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur);
+      } else {
+        ui.hud(game.coins, game.course.coinTotal, game.timeF / 60,
+          placement(game), game.player.hp, game.player.maxHp, game.timeLimit);
+      }
     }
     if (game.state === 'clear') {
       ui.show('clear');
@@ -187,6 +226,11 @@ async function boot() {
       ui.show('lost');
       ui.lost(game.clearPlace, LEVELS[game.levelIndex].passPlace);
     }
+    if (game.state === 'over' || game.state === 'win') {
+      if (!survSaved) { survSaved = true; saveSurvBest(game.survTime); }
+    }
+    if (game.state === 'over') { ui.show('over'); ui.overStats(game.survTime, survBest); }
+    if (game.state === 'win') { ui.show('win'); ui.winStats(survBest); }
 
     renderer.sync(game, game.state);
     renderer.render();

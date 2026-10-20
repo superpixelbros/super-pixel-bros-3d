@@ -175,6 +175,7 @@ class AudioEngine {
       case 'trophy':  this._seq(['C5','E5','G5','C6','E6','G6','C6','E6','G6'], 0.11, 'square', 0.1); break;
       case 'select':  this._seq(['E5'], 0.07, 'square', 0.08); break;
       case 'confirm': this._seq(['C5', 'G5'], 0.08, 'square', 0.09); break;
+      case 'wave':    this._seq(['D5', 'A5', 'D6'], 0.09, 'square', 0.11); break;
     }
   }
 }

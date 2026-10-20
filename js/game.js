@@ -3,14 +3,15 @@
 // No three.js / DOM here — headless checks import this module directly.
 //
 // States: title → select → map → play ⇄ pause → clear → map … → victory.
-// Terminal fail states: 'dq' (time limit) and 'lost' (placement gate) —
-// both offer retry / title and keep rendering the live world behind them.
+// Terminal fail states: 'dq' (time limit), 'lost' (placement gate), and —
+// survival mode only — 'over' (ring took you); 'win' is the arena's
+// 90-second Last-Standing ending. All keep rendering the live world.
 // The map is pure logic here (cursor + hero-walk tween); the diorama is
 // the renderer's job.
 
 import { createWorld } from './phys.js';
 import { Player, HERO_IDS, CHARACTERS } from './hero.js';
-import { LEVELS, courseStep, hazardTouch, windAt } from './levels.js';
+import { LEVELS, courseStep, hazardTouch, windAt, arenaStep, ARENA } from './levels.js';
 import { makeRivals, placement } from './rivals.js';
 
 export default class Game {
@@ -27,10 +28,20 @@ export default class Game {
     this.sfx = () => {};                 // main.js injects the audio hook
     this.hazardsOff = false;             // geometry-only bots (headless)
     this.gatesOff = false;               // race-rule gates off for bots
+    this.mode = 'race';                  // 'race' | 'survival' (per level)
+    this.rivals = [];
+    this.wave = 1;                       // survival wave (HUD)
   }
 
   selectedHero() { return HERO_IDS[this.heroIndex]; }
-  isLastStage() { return this.levelIndex >= LEVELS.length - 1; }
+  // the trophy gate is the last RACING stage — the arena is a side mode
+  // reachable from the map, not an adventure stop
+  isLastStage() {
+    for (let i = LEVELS.length - 1; i >= 0; i--) {
+      if ((LEVELS[i].mode || 'race') !== 'survival') return this.levelIndex >= i;
+    }
+    return true;
+  }
 
   moveCursor(d) {
     this.heroIndex = (this.heroIndex + d + HERO_IDS.length) % HERO_IDS.length;
@@ -48,7 +59,20 @@ export default class Game {
 
   mapMove(d) {
     if (this.map.walk) return;
-    this.map.cursor = Math.max(0, Math.min(this.frontier, this.map.cursor + d));
+    let hi = this.frontier;
+    // survival challenge nodes are ALWAYS visitable, unlocks be damned —
+    // the arena is a pub challenge, not a frontier stage
+    for (let i = 0; i < LEVELS.length; i++) {
+      if ((LEVELS[i].mode || 'race') === 'survival') hi = Math.max(hi, i);
+    }
+    let next = Math.max(0, Math.min(hi, this.map.cursor + d));
+    const locked = (i) => i > this.frontier &&
+      (LEVELS[i].mode || 'race') !== 'survival';
+    // skim past locked stages on the way to a challenge node, never park
+    // on one that is locked
+    while (next > 0 && next < hi && locked(next)) next += d > 0 ? 1 : -1;
+    if (locked(next)) next = this.map.cursor;
+    this.map.cursor = next;
   }
 
   // after clearing a stage: walk the hero onward, or win the trophy
@@ -87,19 +111,26 @@ export default class Game {
   start(levelIndex = this.levelIndex) {
     this.disposeWorld();
     this.levelIndex = levelIndex;
+    const def = LEVELS[levelIndex];
+    this.mode = def.mode || 'race';
     this.world = createWorld(this.R);
-    this.course = LEVELS[levelIndex].build(this.R, this.world);
+    this.course = def.build(this.R, this.world);
     this.player = new Player(this.R, this.world, this.selectedHero(),
       this.course.spawn);
-    this.rivals = makeRivals(this.R, this.world, this.course,
-      CHARACTERS[this.selectedHero()]);
+    // survival = free control: no auto-run, WASD in two axes, hits shove
+    this.player.free = this.mode === 'survival';
+    this.rivals = this.mode === 'survival' ? []
+      : makeRivals(this.R, this.world, this.course,
+        CHARACTERS[this.selectedHero()]);
     this.frame = 0;
     this.timeF = 0;
     this.coins = 0;
     this.deaths = 0;
-    this.timeLimit = LEVELS[levelIndex].timeLimit;
+    this.timeLimit = def.timeLimit || 0;
     this.tickAt = 0;
     this.bestSpawn = { ...this.course.spawn };
+    this.wave = 1;
+    this.ringR = this.course.ringR;
     this.state = 'play';
   }
 
@@ -108,6 +139,7 @@ export default class Game {
     const P = this.player;
     this.frame++;
     this.timeF++;
+    if (this.mode === 'survival') { this.stepSurvival(flags); return; }
     courseStep(this.R, this.course, this.frame, this.hazardsOff ? null : P);
     // drop given-way crumble slabs out of the physics world (safe between
     // steps; the mesh keeps falling visually via fallT)
@@ -189,6 +221,46 @@ export default class Game {
     } else if (rem <= 5 && this.timeF >= this.tickAt) {
       this.tickAt = this.timeF + 60;
       this.sfx('tick');
+    }
+  }
+
+  // ---- survival (Bumper Arena) ------------------------------------------
+  // No flag, no rivals, no hearts: the ring closes, the waves escalate and
+  // every hit is pure knockback. Out of the ring = over; 90s alive = win.
+  stepSurvival(flags) {
+    const P = this.player;
+    const t = this.timeF / 60;
+    arenaStep(this.course, this.frame);
+    if (this.course.wave > this.wave) { this.wave = this.course.wave; this.sfx('wave'); }
+    this.ringR = ARENA.ringR(t);
+    this.course.ringR = this.ringR;
+    if (flags.spin) this.sfx('spin');
+    P.step(flags);
+    this.world.step();
+
+    const p = P.pos;
+    // knockback without consequence — until it isn't: hits never cost
+    // hearts, they just launch you TOWARD the water
+    const k = this.hazardsOff ? null : hazardTouch(this.course, p);
+    if (k && P.invuln <= 0) {
+      P.vx = k.kx * 1.4; P.vz = k.kz * 1.4;
+      P.vy = Math.max(P.vy, 4.6);
+      P.grounded = false;
+      P.invuln = 30;
+      this.sfx('hit');
+    }
+    // the ring is the whole game: past it, the sea takes you
+    if (Math.hypot(p.x, p.z) > this.ringR - 0.1 || p.y < -4) {
+      this.survTime = t;
+      this.sfx('fall'); this.sfx('gameover');
+      this.state = 'over';
+      return;
+    }
+    // the final buzzer: the helicopter window closes at 90s alive
+    if (t >= ARENA.dur) {
+      this.survTime = ARENA.dur;
+      this.sfx('clear');
+      this.state = 'win';
     }
   }
 

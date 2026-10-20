@@ -31,7 +31,7 @@ export const CHARACTERS = {
     color: 0x5560dd, style: 'cap' },    // indigo everyman — does the job
   scoozy:{ speed: 8.3, accel: 68, friction: 12, jump: 9.4, hp: 1, steer: 1.1,
     color: 0xe0559a, style: 'fletch' }, // on wheels: darty, sharp, slippery
-  glorious: { speed: 6.7, accel: 38, friction: 66, jump: 10.8, hp: 3,
+  glorious: { speed: 6.9, accel: 44, friction: 66, jump: 10.8, hp: 3,
     steer: 1.1, color: 0xf0b428, style: 'crown' }, // gold tank — dies loudly
 };
 export const HERO_IDS = Object.keys(CHARACTERS);
@@ -69,6 +69,7 @@ export class Player {
     this.ctrl.setMaxSlopeClimbAngle(55 * Math.PI / 180);
 
     this.vx = 0; this.vy = 0; this.vz = 0;
+    this.free = false;       // true = WASD drives BOTH axes (arena mode)
     this.yaw = 0;          // 0 faces +Z (course direction)
     this.grounded = true;
     this.coyote = 0;
@@ -105,7 +106,8 @@ export class Player {
 
   get pos() { return this.body.translation(); }
 
-  // flags: { x: -1|0|1 steer, jump: edge, jumpHeld: bool, spin: edge }
+  // flags: { x: -1|0|1 steer, jump: edge, jumpHeld: bool, spin: edge,
+  //          z: -1|0|1 forward/back — ONLY used when this.free }
   step(flags) {
     const dt = STEP;
     const d = this.def;
@@ -118,16 +120,28 @@ export class Player {
     if (flags.spin && !stunned && this.spinT <= 0) this.spinT = 28; // ~0.46s
     if (this.spinT > 0) this.spinT -= 1;
 
-    // auto-run along +Z, steering blends lateral speed; wind pushes
-    // regardless of control. Stun locks out steering + wind.
-    const targetVz = this.autoRun && !stunned ? d.speed : 0;
-    const steer = stunned ? 0 : flags.x * d.speed * 0.85 * (d.steer ?? 1);
-    const targetVx = steer + (stunned ? 0 : (flags.windX || 0));
+    // auto-run along +Z (race) — or, in FREE mode (arena), the z flag
+    // drives forward/back and both axes decelerate on their own. Steering
+    // blends lateral speed; wind pushes regardless. Stun locks both.
+    let targetVz, targetVx;
+    if (this.free) {
+      targetVz = stunned ? 0 : (flags.z || 0) * d.speed * 0.82;
+      targetVx = stunned ? 0 : flags.x * d.speed * 0.82 * (d.steer ?? 1);
+    } else {
+      targetVz = this.autoRun && !stunned ? d.speed : 0;
+      const steer = stunned ? 0 : flags.x * d.speed * 0.85 * (d.steer ?? 1);
+      targetVx = steer + (stunned ? 0 : (flags.windX || 0));
+    }
     const air = !this.grounded;
     const airMul = air ? 0.6 * (d.airCtrl ?? 1) : 1;
     this.vz = approach(this.vz, targetVz, d.accel * airMul * dt);
     this.vx = approach(this.vx, targetVx, d.accel * airMul * dt);
-    if (!this.autoRun && !air) this.vx = approach(this.vx, 0, d.friction * dt);
+    if (this.free && !air) {
+      if (!flags.z) this.vz = approach(this.vz, 0, d.friction * dt);
+      if (!flags.x) this.vx = approach(this.vx, 0, d.friction * dt);
+    } else if (!this.autoRun && !air && !flags.x) {
+      this.vx = approach(this.vx, 0, d.friction * dt);
+    }
 
     // jump: buffer the press, consume within buffer or coyote window
     if (flags.jump && !stunned) this.buffer = BUFFER;

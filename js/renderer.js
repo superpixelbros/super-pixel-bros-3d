@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { view } from './view.js';
 import { buildHero } from './models.js';
 import { CHARACTERS, HERO_RADIUS, HERO_HALF } from './hero.js';
-import { LEVELS } from './levels.js';
+import { LEVELS, ARENA } from './levels.js';
 
 // capsule center → feet, derived from the collider constants
 const FEET = HERO_HALF + HERO_RADIUS;
@@ -81,28 +81,43 @@ export class Renderer {
     g.visible = false;
     this.scene.add(g);
     const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+    let lastRace = 0;
+    LEVELS.forEach((l, i) => { if ((l.mode || 'race') !== 'survival') lastRace = i; });
 
     LEVELS.forEach((lvl, i) => {
+      const arena = (lvl.mode || 'race') === 'survival';
       const island = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.55, 1.9, 0.9, 9),
+        arena
+          ? new THREE.CylinderGeometry(1.7, 2.0, 0.9, 20)   // arena: round stage
+          : new THREE.CylinderGeometry(1.55, 1.9, 0.9, 9),
         mat(lvl.theme.sand)
       );
       island.position.set(i * 6, 0, 0);
       island.receiveShadow = true;
       g.add(island);
+      if (arena) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(1.2, 0.06, 6, 24), mat(0xffd23e));
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(i * 6, 0.5, 0);
+        g.add(ring);
+      }
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.05, 0.05, 1.1, 6), mat(0xd8d4c8));
       pole.position.set(i * 6 + 0.85, 1.0, -0.7);
       const flag = new THREE.Mesh(
-        new THREE.BoxGeometry(0.5, 0.32, 0.03), mat(i === LEVELS.length - 1 ? 0xffd23e : 0xe04a3f));
+        new THREE.BoxGeometry(0.5, 0.32, 0.03),
+        mat(arena ? 0xffd23e : i === lastRace ? 0xffd23e : 0xe04a3f));
       flag.position.set(i * 6 + 1.08, 1.36, -0.7);
       g.add(pole, flag);
     });
 
-    const bridge = new THREE.Mesh(
-      new THREE.BoxGeometry(3.4, 0.22, 0.7), mat(0x8a5a33));
-    bridge.position.set(3, 0.34, 0);
-    g.add(bridge);
+    for (let i = 0; i < LEVELS.length - 1; i++) {
+      const bridge = new THREE.Mesh(
+        new THREE.BoxGeometry(3.4, 0.22, 0.7), mat(0x8a5a33));
+      bridge.position.set(i * 6 + 3, 0.34, 0);
+      g.add(bridge);
+    }
 
     this.mapRing = new THREE.Mesh(
       new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20),
@@ -191,16 +206,16 @@ export class Renderer {
       const g = new THREE.Group();
       g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 1.1, 12), wood)
         .translateY(0.5));
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.54, 0.54), wood);
-      arm.position.set(1.55, 0.55, 0);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(h.len * 2, 0.54, 0.54), wood);
+      arm.position.set(h.len / 2, 0.55, 0);
       arm.castShadow = true;
       const tip = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7),
         mat(0xc0392b));
-      tip.position.set(4.1, 0.55, 0);
+      tip.position.set(h.len * 1.32, 0.55, 0);
       g.add(arm, tip);
       g.position.set(0, 0, h.z);
       this.courseGroup.add(g);
-      return { body: h.body, g };
+      return { body: h.body, h, g };
     });
 
     this.pillarMeshes = course.pillars.map((p) => {
@@ -254,14 +269,58 @@ export class Renderer {
         b.x, 0.12, b.z);
     }
 
-    // finish pad + flagpole
-    add(new THREE.Mesh(new THREE.BoxGeometry(9, 0.16, 2.4), mat(0xf4f1e8)),
-      0, 0.08, course.finishZ + 1);
-    const pole = add(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4.4, 8),
-      mat(0xd8d4c8)), 3.6, 2.2, course.finishZ + 1.4);
-    pole.castShadow = true;
-    add(new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 0.06), mat(0xe04a3f)),
-      2.9, 3.7, course.finishZ + 1.4);
+    // blocking walls: canyon chicanes, portcullis frames, the Needle
+    for (const w of course.walls) {
+      const m = add(new THREE.Mesh(
+        new THREE.BoxGeometry(w.x1 - w.x0, w.h, w.z1 - w.z0), rock),
+      (w.x0 + w.x1) / 2, w.top + w.h / 2, (w.z0 + w.z1) / 2);
+      m.castShadow = true;
+      m.receiveShadow = true;
+    }
+    // portcullis gates: iron slabs riding their kinematic bodies
+    const gateIron = mat(0x535863);
+    this.gateMeshes = course.gates.map((gt) => {
+      const grp = new THREE.Group();
+      const slab = new THREE.Mesh(
+        new THREE.BoxGeometry(gt.gw, gt.h, 0.24), gateIron);
+      slab.castShadow = true;
+      grp.add(slab);
+      grp.add(new THREE.Mesh(new THREE.BoxGeometry(gt.gw + 0.2, 0.18, 0.34),
+        gateIron).translateY(-gt.h / 2 - 0.09));   // toothed bottom bar
+      grp.position.set(gt.cx, gt.h / 2, gt.z);
+      this.courseGroup.add(grp);
+      return { gt, grp };
+    });
+
+    // survival arena: the disc floor + the closing gold ring
+    this.arenaRing = null;
+    if (course.isArena) {
+      const disc = add(new THREE.Mesh(
+        new THREE.CylinderGeometry(ARENA.floorR, ARENA.floorR + 0.8, 2, 40),
+        sand), 0, -1, 0);
+      disc.receiveShadow = true;
+      const rim = add(new THREE.Mesh(
+        new THREE.TorusGeometry(ARENA.floorR, 0.24, 8, 44), sandDark));
+      rim.rotation.x = Math.PI / 2;
+      rim.position.y = 0.05;
+      const ring = add(new THREE.Mesh(
+        new THREE.TorusGeometry(1, 0.14, 8, 56),
+        new THREE.MeshBasicMaterial({ color: 0xffd23e })), 0, 0.1, 0);
+      ring.rotation.x = Math.PI / 2;
+      ring.scale.set(course.ringR, course.ringR, 1);
+      this.arenaRing = ring;
+    }
+
+    // finish pad + flagpole (survival has no flag — only the clock)
+    if (isFinite(course.finishZ)) {
+      add(new THREE.Mesh(new THREE.BoxGeometry(9, 0.16, 2.4), mat(0xf4f1e8)),
+        0, 0.08, course.finishZ + 1);
+      const pole = add(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4.4, 8),
+        mat(0xd8d4c8)), 3.6, 2.2, course.finishZ + 1.4);
+      pole.castShadow = true;
+      add(new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 0.06), mat(0xe04a3f)),
+        2.9, 3.7, course.finishZ + 1.4);
+    }
 
     for (const d of course.decor) {
       if (d.kind === 'palm') {
@@ -314,7 +373,8 @@ export class Renderer {
     // hero and driving the follow cam (previously dq froze the camera and
     // teleported the hero back to the menu pedestal)
     const p = (state === 'play' || state === 'pause' || state === 'clear'
-      || state === 'dq' || state === 'lost' || state === 'victory')
+      || state === 'dq' || state === 'lost' || state === 'victory'
+      || state === 'over' || state === 'win')
       ? game.player : null;
 
     if (this.coinMeshes) {
@@ -328,27 +388,42 @@ export class Renderer {
       }
     }
     if (game.course) {
-      for (const h of this.hammerMeshes) {
-        const q = h.body.rotation();
-        h.g.quaternion.set(q.x, q.y, q.z, q.w);
+      for (const hm of this.hammerMeshes) {
+        const q = hm.body.rotation();
+        hm.g.quaternion.set(q.x, q.y, q.z, q.w);
+        hm.g.visible = hm.h.active !== false;    // parked before its wave
       }
       for (const pm of this.pillarMeshes) {
         pm.m.position.y = pm.body.translation().y;
       }
-      for (const { p, g, rope, ball } of this.pendulumMeshes) {
-        const t = p.body.translation();
-        ball.position.set(t.x, t.y, p.z);
+      for (const hm of this.pendulumMeshes) {
+        const tr = hm.p.body.translation();
+        hm.g.visible = hm.p.active !== false;
+        hm.ball.position.set(tr.x, tr.y, hm.p.z);
         // rope spans pivot → ball
-        const dx = t.x, dy = p.pivY - t.y;
+        const dx = tr.x, dy = hm.p.pivY - tr.y;
         const len = Math.hypot(dx, dy) || 0.01;
-        rope.scale.y = len;
-        rope.position.set(t.x / 2, (t.y + p.pivY) / 2, p.z);
-        rope.rotation.z = -Math.atan2(dx, dy);
+        hm.rope.scale.y = len;
+        hm.rope.position.set(tr.x / 2, (tr.y + hm.p.pivY) / 2, hm.p.z);
+        hm.rope.rotation.z = -Math.atan2(dx, dy);
       }
       for (const { r, m } of this.rollerMeshes) {
-        const t = r.body.translation();
-        m.position.x = t.x;
-        m.rotation.x = t.x / r.r;           // roll with travel (axis = X)
+        const tr = r.body.translation();
+        m.visible = r.active !== false;
+        m.position.set(tr.x, tr.y, tr.z);
+        // log axis stays along X for both sweep directions — it rolls the
+        // axis perpendicular to travel, which is X either way
+        m.rotation.x = (r.ax === 'z' ? tr.z : tr.x) / r.r;
+      }
+      for (const { gt, grp } of this.gateMeshes) {
+        grp.position.y = gt.body.translation().y;
+      }
+      if (this.arenaRing) {
+        const rr = game.course.ringR || 10.6;
+        this.arenaRing.scale.set(rr, rr, 1);
+        // gentle golden pulse so the closing line is never missed
+        this.arenaRing.material.color.setHex(
+          Math.floor(performance.now() / 300) % 2 ? 0xffd23e : 0xffe98a);
       }
       for (const { p, m } of this.pistonMeshes) {
         m.position.x = p.body.translation().x;
@@ -432,10 +507,15 @@ export class Renderer {
         0, 1.1, -14
       );
     } else if (state === 'map') {
+      const mid = (LEVELS.length - 1) * 3;
       this.lerpCam(
-        3 + Math.sin(t * 0.18) * 0.7, 4.3, 7.2,
-        3, 0.5, 0
+        mid + Math.sin(t * 0.18) * 0.7, 4.3, 7.2,
+        mid, 0.5, 0
       );
+    } else if (p && game.course && game.course.isArena) {
+      // arena: a wide, deliberate tower cam — the whole ring in frame,
+      // fixed yaw so WASD steering stays screen-true
+      this.lerpCam(0, 15, -16, 0, 0.3, 2);
     } else if (p) {
       const pos = p.pos;
       this.lerpCam(
