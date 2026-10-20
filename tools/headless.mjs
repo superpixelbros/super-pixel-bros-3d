@@ -128,19 +128,31 @@ ok(g3.state === 'clear' && g3.clearTime > 0, `finished → clear in ${g3.clearTi
 console.log('roster reachability');
 const levelTimes = LEVELS.map(() => []);
 for (let li = 0; li < LEVELS.length; li++) {
+  if ((LEVELS[li].mode || 'race') === 'survival') continue;   // own section
   for (const id of HERO_IDS) {
     const h = mkGame(id, li);
     h.hazardsOff = true;   // geometry + pace probe: timed hazards are the
                            // human problem, the bot proves the platforming
     h.gatesOff = true;     // placement gates need human racing, not a bot
     const zones = h.course.jumpZones;
+    const narrows = h.course.narrows;
     let hold = 0;
-    for (let i = 0; i < 3600 && h.state === 'play'; i++) {
+    for (let i = 0; i < 5400 && h.state === 'play'; i++) {
       const q = h.player.pos;
       const jump = h.player.grounded &&
         zones.some(([a, b]) => q.z > a && q.z < b);
       if (jump) hold = 32;
-      h.step({ x: 0, jump, jumpHeld: hold > 0, spin: false });
+      // gated chicanes: inside a narrow, steer for the GAP center (a
+      // centered narrow is a no-op here — the hero is already at 0).
+      // Pressing along a wall still slides you into the opening.
+      let steer = 0;
+      for (const [z0, z1, , cx = 0] of narrows) {
+        if (q.z > z0 - 1.5 && q.z < z1 && Math.abs(q.x - cx) > 0.5) {
+          steer = Math.sign(cx - q.x);
+          break;
+        }
+      }
+      h.step({ x: steer, jump, jumpHeld: hold > 0, spin: false });
       if (hold > 0) hold--;
     }
     const q = h.player.pos;
@@ -157,7 +169,7 @@ for (let li = 0; li < LEVELS.length; li++) {
 // pick; this only catches a stat regression making one hero unviable.)
 for (let li = 0; li < LEVELS.length; li++) {
   const ts = levelTimes[li];
-  if (!ts.every((e) => e.t > 0)) continue;   // a fail already reported
+  if (!ts.length || !ts.every((e) => e.t > 0)) continue;   // arena: own section
   const fast = Math.min(...ts.map((e) => e.t));
   const slow = ts.reduce((a, e) => (e.t > a.t ? e : a));
   ok(slow.t / fast <= 1.40,
@@ -355,6 +367,43 @@ console.log('rivals');
   ok(rg.clearPlace >= 1 && rg.clearPlace <= 4,
     `hero placement recorded: ${rg.clearPlace}`);
   rg.disposeWorld();
+
+  // THE GAUNTLET STRESS: on Ridge v2 the rivals must thread the canyon
+  // gates, QUEUE at the portcullis and single-file the Needle — live
+  // hazards, no bot mercy — and still all come out the far side
+  const rg2 = mkGame('rosso', 1);
+  const zones2 = rg2.course.jumpZones, narrows2 = rg2.course.narrows;
+  let hold2 = 0;
+  for (let i = 0; i < 5400 && rg2.state === 'play'; i++) {
+    const q = rg2.player.pos;
+    const jump = rg2.player.grounded &&
+      zones2.some(([a, b]) => q.z > a && q.z < b);
+    if (jump) hold2 = 32;
+    let steer = 0;
+    for (const [z0, z1, , cx = 0] of narrows2) {
+      if (q.z > z0 - 1.5 && q.z < z1 && Math.abs(q.x - cx) > 0.5) {
+        steer = Math.sign(cx - q.x);
+        break;
+      }
+    }
+    rg2.step({ x: steer, jump, jumpHeld: hold2 > 0, spin: false });
+    if (hold2 > 0) hold2--;
+  }
+  for (let i = 1; i <= 60 * 40; i++) {
+    // keep the kinematics alive while the rivals run out their race —
+    // the portcullis only lifts if courseStep keeps turning
+    courseStep(R, rg2.course, rg2.timeF + i, null);
+    for (const r of rg2.rivals) r.step(rg2.course, rg2.timeF + i, (rg2.timeF + i) / 60, false);
+    rg2.world.step();
+  }
+  for (const r of rg2.rivals) {
+    ok(r.pos.z > 40 || r.finished,
+      `ridge rival ${r.id} passed the canyon (z=${r.pos.z.toFixed(1)}` +
+      (r.finished ? ', finished)' : ')'));
+  }
+  ok(rg2.rivals.some((r) => r.finished),
+    'a rival can WIN Sunset Ridge fair and square (gates uncorked)');
+  rg2.disposeWorld();
 }
 
 // ---- 8) adventure map logic -----------------------------------------------
@@ -364,10 +413,15 @@ mg.enterMap();
 ok(mg.state === 'map' && mg.map.cursor === 0 && !mg.map.walk,
   'enterMap: fresh save sits at stage 1');
 mg.mapMove(1);
-ok(mg.map.cursor === 0, 'cursor cannot pass the frontier');
+ok(mg.map.cursor === 2,
+  'frontier 0: the arena challenge is always reachable (skips locked stages)');
+mg.mapMove(-1);
+ok(mg.map.cursor === 0, 'a locked stage is skimmed past, never parked on');
 mg.frontier = 1;
 mg.mapMove(1);
 ok(mg.map.cursor === 1, 'cursor reaches the frontier stage');
+mg.mapMove(1);
+ok(mg.map.cursor === 2, 'the arena node sits beyond the last race stage');
 mg.mapMove(-1);
 mg.mapMove(-1);
 ok(mg.map.cursor === 0, 'cursor clamps at stage 1');
@@ -392,6 +446,66 @@ ok(!hp1.walking && Math.abs(hp1.x - 6) < 0.01,
 mg.levelIndex = 1;
 ok(mg.advanceFrontier() === 'victory', 'clearing the last stage wins the trophy');
 mg.disposeWorld();
+
+// ---- 10) survival arena ----------------------------------------------------
+console.log('survival arena');
+{
+  const live = (c) => [c.pendulums, c.rollers, c.hammers]
+    .reduce((n, arr) => n + arr.filter((h) => h.active).length, 0);
+
+  const sg = mkGame('rosso', 2);
+  ok(sg.mode === 'survival' && sg.player.free && sg.rivals.length === 0,
+    'arena: free control, no rivals, no auto-run');
+  for (let i = 0; i < 90; i++) {
+    sg.step({ x: 0, z: 1, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(sg.player.pos.z > -4, `throttle drives forward (z=${sg.player.pos.z.toFixed(1)})`);
+  for (let i = 0; i < 90; i++) {
+    sg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(Math.abs(sg.player.vz) < 0.3, 'releasing the throttle brakes to a stop');
+  sg.disposeWorld();
+
+  // ring closes monotonically, waves only climb, hazard count escalates
+  const rg = mkGame('rosso', 2);
+  rg.hazardsOff = true;
+  let mono = true, prevR = rg.ringR, prevW = 1, live0 = 0, live45 = 0;
+  for (let i = 0; i < 60 * 47 && rg.state === 'play'; i++) {
+    rg.player.body.setTranslation({ x: 0, y: 1.2, z: 0 }, true); // hover the hub
+    rg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+    if (rg.ringR > prevR + 1e-9 || rg.wave < prevW) mono = false;
+    prevR = rg.ringR; prevW = rg.wave;
+    const t = rg.timeF / 60;
+    if (t > 0.5 && t < 0.6 && !live0) live0 = live(rg.course);
+    if (t > 45.5 && t < 45.7 && !live45) live45 = live(rg.course);
+  }
+  ok(mono && rg.state === 'play', 'ring shrinks, waves only ever climb');
+  ok(live0 === 2 && live45 === 6,
+    `waves bring the thunder: ${live0} live hazards at 0.5s, ${live45} at 45s`);
+  rg.disposeWorld();
+
+  // stand outside the closing ring → the sea takes you
+  const og = mkGame('rosso', 2);
+  og.hazardsOff = true;
+  og.player.body.setTranslation({ x: 0, y: 1.2, z: 9.85 }, true);
+  for (let i = 0; i < 60 * 30 && og.state === 'play'; i++) {
+    og.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(og.state === 'over' && og.survTime > 8,
+    `the ring swallows you (over at ${og.survTime?.toFixed(1)}s)`);
+  og.disposeWorld();
+
+  // the full gauntlet: 90s alive → LAST STANDING
+  const wg = mkGame('aqua', 2);
+  wg.hazardsOff = true;
+  for (let i = 0; i < 60 * 92 && wg.state === 'play'; i++) {
+    wg.player.body.setTranslation({ x: 0, y: 1.2, z: 0 }, true);
+    wg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(wg.state === 'win' && wg.survTime >= 90,
+    `survive 90 seconds → WIN (t=${(wg.timeF / 60).toFixed(1)}s)`);
+  wg.disposeWorld();
+}
 
 // ---- done -----------------------------------------------------------------
 if (fails) {
