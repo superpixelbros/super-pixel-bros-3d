@@ -168,6 +168,8 @@ class AudioEngine {
       case 'hit':     this._noise(0.1, 0.16); this._slide(220, 70, 0.18, 'square', 0.11); break;
       case 'die':     this._seq(['B4','F4','D4','G3','C3'], 0.13, 'square', 0.1); break;
       case 'bounce':  this._slide(240, 900, 0.2, 'square', 0.1); break;
+      case 'boost':   this._seq(['E5','A5','E6'], 0.06, 'square', 0.09); break;
+      case 'jinx':    this._slide(420, 90, 0.35, 'triangle', 0.11); break;
       case 'fall':    this._slide(500, 90, 0.5, 'square', 0.09); break;
       case 'clear':   this._seq(['C5','E5','G5','C6','G5','C6'], 0.12, 'square', 0.1); break;
       case 'tick':    this._tone('A5', this.ctx.currentTime, 0.05, 'square', 0.09); break;

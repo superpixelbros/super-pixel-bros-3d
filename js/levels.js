@@ -153,6 +153,7 @@ function newCourse(theme) {
     winds: [],
     checkpoints: [], decor: [], jumpZones: [],
     walls: [], gates: [],       // blocking walls + portcullis gates
+    boosts: [], curses: [],     // speed pickups {x, y, z, taken}
     narrows: [],        // [z0, z1, maxLaneRadius, centerX=0] — AI lane clamps
     finishZ: 0, ringR: 999,
     spawn: { x: 0, y: 1.6, z: -3 }, coinTotal: 0,
@@ -179,9 +180,13 @@ const THEME_SHORE = {
   wood: 0x8a5a33, sea: 0x2f8fd0, sun: 0xfff2d8, hemiGround: 0x8a7a55,
 };
 
+// Sunny Shore v2: still the friendliest stage, but it stopped pulling
+// punches — a first chicane gate before the hammer arena teaches the wall
+// line you'll need on the Ridge, and the long back stretch now pairs a
+// slow roller with the pendulum. Boost rings and jinx orbs debut here too.
 export function buildShore(R, world) {
   const c = newCourse(THEME_SHORE);
-  const { ground, step, coinRow, decor } = kit(R, world, c);
+  const { ground, step, coinRow, decor, wall } = kit(R, world, c);
 
   ground(-18, 16);                     // menu pedestal at z=-14
   coinRow(4, 10, 4);
@@ -194,6 +199,13 @@ export function buildShore(R, world) {
   ground(40, 52);                      // hammer arena
   c.hammers.push(makeHammer(R, world, 46, 1.5));
   coinRow(41.5, 44.5, 2, 0.9, 3);
+  // first chicane gate of the game: a generous 3.6m opening offset right
+  // (the Ridge's canyon gates run a metre narrower), well before the
+  // hammer — the weave lesson starts here. The narrows lead starts ~1.2m
+  // ahead of the wall so queued runners steer early instead of parking on
+  // the wall face (the lead trap).
+  wall(-4.8, -0.9, 43.2, 44.0); wall(2.7, 4.8, 43.2, 44.0);
+  c.narrows.push([42.0, 44.0, 1.8, 0.9]);
   // 2.5m gap with a bobbing pillar: its far edge overlaps the landing
   // ground, and the top stays ≤0.65m so it's a hop-able prop, never a wall
   c.pillars.push(makePillar(R, world, 53.3,
@@ -209,6 +221,18 @@ export function buildShore(R, world) {
   c.pendulums.push(makePendulum(R, world, 24, { omega: 2.0 }));
   c.bounces.push(makeBounce(R, world, 3.2, 62, { up: 14 }));
   coinRow(62, 63.5, 2, 3.0, 3.2);
+  // Shore v2 muscle: a slow roller sweeps the back straight while the
+  // pendulum answers in counter-phase — a duet now, still gentle tempos.
+  c.rollers.push(makeRoller(R, world, 68, { amp: 3.2, omega: 1.3 }));
+  c.pendulums.push(makePendulum(R, world, 74, { omega: 1.7, phase: Math.PI }));
+
+  // speed pickups: a free boost ring teaching the mechanic after the first
+  // gap, a jinx orb lurking beside the pendulum for lane-grazers, and one
+  // high up in the bounce-pad pocket for those who take the air route
+  c.boosts.push({ x: 0, y: 1.5, z: 21, taken: false });
+  c.curses.push({ x: 2.4, y: 1.4, z: 26.5, taken: false });
+  c.boosts.push({ x: 3.2, y: 2.0, z: 66, taken: false });
+  c.curses.push({ x: -2.2, y: 1.4, z: 71, taken: false });
 
   c.checkpoints.push({ z: 28, x: 0, y: 1.6 }, { z: 66, x: 0, y: 1.6 });
   c.jumpZones.push([14.6, 15.4], [29.3, 30.3], [32.3, 33.3], [51.0, 51.8]);
@@ -315,6 +339,14 @@ export function buildRidge(R, world) {
   c.hammers.push(makeHammer(R, world, 95.5, 1.9, 0));
   coinRow(96.5, 98.5, 2, 0.9, 2.4);
 
+  // speed pickups: a jinx squatting on the racing line out of the canyon,
+  // another poisoning the portcullis queue — then the overtakes: a boost in
+  // the open after the gate and one at the needle exit for the final sprint
+  c.curses.push({ x: 0, y: 1.4, z: 41, taken: false });
+  c.curses.push({ x: 1.2, y: 1.4, z: 66, taken: false });
+  c.boosts.push({ x: -1.8, y: 1.5, z: 74, taken: false });
+  c.boosts.push({ x: 0, y: 1.5, z: 93.6, taken: false });
+
   c.jumpZones.push(
     [13.2, 14.0], [37.7, 38.5], [47.2, 48.0],
     [56.2, 57.1], [58.8, 59.7], [61.2, 62.1],
@@ -351,24 +383,25 @@ export function buildArena(R, world) {
     .setTranslation(0, -1, 0));
   world.createCollider(R.ColliderDesc.cylinder(1, ARENA.floorR), b);
 
-  // waves: two pendulums → log pair (x + z sweepers) → center hammer →
-  // center pendulum → second hammer → z-log duo. startT gates each group.
+  // waves (every 10s of the 60s run): two pendulums → log pair (x + z
+  // sweepers) → center hammer → center pendulum → second hammer → z-log
+  // duo. startT gates each group.
   c.pendulums.push(
     makePendulum(R, world, -4, { ampA: 1.15, omega: 1.9, phase: 0, startT: 0 }),
     makePendulum(R, world, 4, { ampA: 1.15, omega: 1.9, phase: Math.PI, startT: 0 }),
-    makePendulum(R, world, 0, { ampA: 0.9, omega: 2.3, phase: 0.6, startT: 45 }),
+    makePendulum(R, world, 0, { ampA: 0.9, omega: 2.3, phase: 0.6, startT: 30 }),
   );
   c.rollers.push(
-    makeRoller(R, world, 0, { amp: 5.2, omega: 1.2, ax: 'x', startT: 15 }),
-    makeRoller(R, world, 0, { amp: 5.0, omega: 1.4, phase: Math.PI / 2, ax: 'z', startT: 15 }),
-    makeRoller(R, world, 0, { amp: 4.2, omega: 1.6, phase: Math.PI, ax: 'z', startT: 75 }),
+    makeRoller(R, world, 0, { amp: 5.2, omega: 1.2, ax: 'x', startT: 10 }),
+    makeRoller(R, world, 0, { amp: 5.0, omega: 1.4, phase: Math.PI / 2, ax: 'z', startT: 10 }),
+    makeRoller(R, world, 0, { amp: 4.2, omega: 1.6, phase: Math.PI, ax: 'z', startT: 50 }),
   );
   c.hammers.push(
     makeHammer(R, world, 0, 1.3, 0, 2.6),
     makeHammer(R, world, 0, 1.7, Math.PI / 2, 2.4),
   );
-  c.hammers[0].startT = 30;
-  c.hammers[1].startT = 60;
+  c.hammers[0].startT = 20;
+  c.hammers[1].startT = 40;
 
   c.spawn = { x: 0, y: 1.6, z: -7 };
   c.finishZ = Infinity;      // survival: there is no flag, only the clock
@@ -385,6 +418,23 @@ export function buildArena(R, world) {
 // crumbles; the reachability bot omits it.
 export function courseStep(R, course, frame, hero = null) {
   const t = frame / 60;
+  // geometry-only probe (Game's hazardsOff passes hero = null): park every
+  // MOVING hazard body below the world so bots measure the platform, not
+  // the timing lottery. The hammer and portcullis are real colliders and
+  // would otherwise body-check bots — or miss them — at random phases.
+  if (!hero) {
+    const park = (b) => {
+      const p = b.translation();
+      b.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
+    };
+    for (const h of course.hammers) park(h.body);
+    for (const p of course.pillars) park(p.body);
+    for (const p of course.pendulums) park(p.body);
+    for (const r of course.rollers) park(r.body);
+    for (const p of course.pistons) park(p.body);
+    for (const g of course.gates) park(g.body);
+    return;
+  }
   for (const h of course.hammers) {
     const a = t * h.omega + h.phase;
     h.body.setNextKinematicRotation(
@@ -437,7 +487,8 @@ const CRUMBLE_FRAMES = 36;   // ~0.6s standing before it drops (keep moving)
 // The ring closes linearly from startR to endR over `dur` seconds; outside
 // it is water. Pure function so game + tests + renderer agree every frame.
 export const ARENA = {
-  dur: 90, waveLen: 15, waves: 6, startR: 10.6, endR: 4.6, floorR: 12,
+  dur: 60, waveLen: 10, waves: 6, startR: 10.6, endR: 4.6, floorR: 12,
+  hearts: 4,          // flat heart pool for every hero — leaderboard fair
   ringR: (t) => ARENA.startR
     - (ARENA.startR - ARENA.endR) * Math.min(1, t / ARENA.dur),
 };

@@ -4,8 +4,8 @@
 //
 // States: title → select → map → play ⇄ pause → clear → map … → victory.
 // Terminal fail states: 'dq' (time limit), 'lost' (placement gate), and —
-// survival mode only — 'over' (ring took you); 'win' is the arena's
-// 90-second Last-Standing ending. All keep rendering the live world.
+// survival mode only — 'over' (ring took you, or the hearts ran out); 'win'
+// is the arena's 60-second Last-Standing ending, the gate to the trophy.
 // The map is pure logic here (cursor + hero-walk tween); the diorama is
 // the renderer's job.
 
@@ -34,11 +34,15 @@ export default class Game {
   }
 
   selectedHero() { return HERO_IDS[this.heroIndex]; }
-  // the trophy gate is the last RACING stage — the arena is a side mode
-  // reachable from the map, not an adventure stop
-  isLastStage() {
-    for (let i = LEVELS.length - 1; i >= 0; i--) {
-      if ((LEVELS[i].mode || 'race') !== 'survival') return this.levelIndex >= i;
+
+  // every RACING stage beaten? frontier only moves by clearing, so it must
+  // sit past the last race stop. The trophy is the arena prize — but it is
+  // only raised with the whole race ladder done.
+  allRacesCleared() {
+    for (let i = 0; i < LEVELS.length; i++) {
+      if ((LEVELS[i].mode || 'race') !== 'survival' && this.frontier < i + 1) {
+        return false;
+      }
     }
     return true;
   }
@@ -75,16 +79,24 @@ export default class Game {
     this.map.cursor = next;
   }
 
-  // after clearing a stage: walk the hero onward, or win the trophy
+  // after clearing a stage: walk the hero onward — race stages into the
+  // next node (the arena included), no early trophy. The victory screen
+  // lives behind claimVictory() on the arena's win card.
   advanceFrontier() {
-    if (this.isLastStage()) {
-      this.state = 'victory';
-      return 'victory';
-    }
-    this.map.walk = { from: this.levelIndex, to: this.levelIndex + 1, t: 0 };
-    this.frontier = Math.max(this.frontier, this.levelIndex + 1);
+    const to = this.levelIndex + 1;
+    this.map.walk = { from: this.levelIndex, to, t: 0 };
+    this.frontier = Math.max(this.frontier, to);
     this.map.cursor = this.frontier;
     this.state = 'map';
+    return 'map';
+  }
+
+  // ENTER on the arena's win card: trophy if the race ladder is done,
+  // otherwise back to the map with a reminder of what is still owed.
+  claimVictory() {
+    this.disposeWorld();
+    if (this.allRacesCleared()) { this.state = 'victory'; return 'victory'; }
+    this.enterMap(false);
     return 'map';
   }
 
@@ -118,7 +130,13 @@ export default class Game {
     this.player = new Player(this.R, this.world, this.selectedHero(),
       this.course.spawn);
     // survival = free control: no auto-run, WASD in two axes, hits shove
+    // AND bite — a flat 4-heart pool for every hero keeps the leaderboard
+    // honest (identity lives in grip, not in hit points, in here)
     this.player.free = this.mode === 'survival';
+    if (this.mode === 'survival') {
+      this.player.maxHp = ARENA.hearts;
+      this.player.hp = ARENA.hearts;
+    }
     this.rivals = this.mode === 'survival' ? []
       : makeRivals(this.R, this.world, this.course,
         CHARACTERS[this.selectedHero()]);
@@ -183,6 +201,29 @@ export default class Game {
         c.taken = true; this.coins++; this.sfx('coin');
       }
     }
+    // speed pickups: boost rings and jinx orbs catch EVERY runner — hero
+    // and rivals share the same luck (bot reachability runs set pickupsOff)
+    if (!this.pickupsOff) {
+      const runners = [P];
+      for (const r of this.rivals) runners.push(r.player);
+      for (const kind of [1, -1]) {
+        const arr = kind > 0 ? this.course.boosts : this.course.curses;
+        for (const u of arr) {
+          if (u.taken) continue;
+          for (const q of runners) {
+            if (q.dead) continue;
+            const w = q.pos;
+            const dx = w.x - u.x, dy = w.y - u.y, dz = w.z - u.z;
+            if (dx * dx + dy * dy + dz * dz < 1.5) {
+              u.taken = true;
+              q.applyMod(kind);
+              if (q === P) this.sfx(kind > 0 ? 'boost' : 'jinx');
+              break;
+            }
+          }
+        }
+      }
+    }
     // checkpoints
     for (const cp of this.course.checkpoints) {
       if (p.z > cp.z && (this.bestSpawn.z ?? -999) < cp.z) {
@@ -225,8 +266,9 @@ export default class Game {
   }
 
   // ---- survival (Bumper Arena) ------------------------------------------
-  // No flag, no rivals, no hearts: the ring closes, the waves escalate and
-  // every hit is pure knockback. Out of the ring = over; 90s alive = win.
+  // No flag, no rivals: the ring closes, the waves escalate, and every hit
+  // costs a heart on top of the knockback. Out of the ring = over; hearts
+  // at zero = over; ARENA.dur (60s) alive = win.
   stepSurvival(flags) {
     const P = this.player;
     const t = this.timeF / 60;
@@ -239,15 +281,18 @@ export default class Game {
     this.world.step();
 
     const p = P.pos;
-    // knockback without consequence — until it isn't: hits never cost
-    // hearts, they just launch you TOWARD the water
+    // hits bite now: knockback toward the water AND a heart off the pool.
+    // hurt() carries the 1.2s mercy window, so no chip-damage spirals.
     const k = this.hazardsOff ? null : hazardTouch(this.course, p);
-    if (k && P.invuln <= 0) {
-      P.vx = k.kx * 1.4; P.vz = k.kz * 1.4;
-      P.vy = Math.max(P.vy, 4.6);
-      P.grounded = false;
-      P.invuln = 30;
-      this.sfx('hit');
+    if (k) {
+      const res = P.hurt(k.kx * 1.4, k.kz * 1.4, 4.6);
+      if (res === 'hit') this.sfx('hit');
+      else if (res === 'dead') {
+        this.survTime = t;
+        this.sfx('die'); this.sfx('gameover');
+        this.state = 'over';
+        return;
+      }
     }
     // the ring is the whole game: past it, the sea takes you
     if (Math.hypot(p.x, p.z) > this.ringR - 0.1 || p.y < -4) {
@@ -256,7 +301,7 @@ export default class Game {
       this.state = 'over';
       return;
     }
-    // the final buzzer: the helicopter window closes at 90s alive
+    // the final buzzer: outlast the whole closing ring → the win card
     if (t >= ARENA.dur) {
       this.survTime = ARENA.dur;
       this.sfx('clear');

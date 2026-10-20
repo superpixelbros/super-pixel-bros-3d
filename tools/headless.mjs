@@ -13,9 +13,9 @@ import { initPhysics } from '../js/phys.js';
 import Game from '../js/game.js';
 import {
   LEVELS, hazardTouch, windAt, courseStep, makeHammer, makePendulum,
-  makeRoller, makePiston, makeCrumble, makeBounce, makeWind,
+  makeRoller, makePiston, makeCrumble, makeBounce, makeWind, ARENA,
 } from '../js/levels.js';
-import { Player, HERO_IDS } from '../js/hero.js';
+import { Player, HERO_IDS, CHARACTERS } from '../js/hero.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const jsDir = join(here, '..', 'js');
@@ -70,7 +70,7 @@ function mkGame(id, level = 0) {
   return g;
 }
 
-const g = mkGame('rosso');
+const g = mkGame('hero');
 g.hazardsOff = true;   // mechanics probe: hazards get their own section
 ok(g.state === 'play' && g.player, 'start() enters play with a player');
 
@@ -105,7 +105,7 @@ g.step({ x: 0, jump: false, jumpHeld: false, spin: false });
 ok(g.coins > 0, `coin collected (${g.coins})`);
 
 // checkpoints + fall respawn
-const g2 = mkGame('bolt');
+const g2 = mkGame('yas');
 g2.player.body.setTranslation({ x: 0, y: 1.2, z: 30 }, true);
 for (let i = 0; i < 3; i++) g2.step({ x: 0, jump: false, jumpHeld: false, spin: false });
 ok(g2.player.spawn.z >= 28, `checkpoint armed (spawn z=${g2.player.spawn.z})`);
@@ -114,7 +114,7 @@ g2.step({ x: 0, jump: false, jumpHeld: false, spin: false });
 ok(g2.player.pos.y > -5 && g2.deaths === 1, 'falling respawns at checkpoint');
 
 // finish → clear
-const g3 = mkGame('aqua');
+const g3 = mkGame('ghzl');
 g3.player.body.setTranslation({ x: 0, y: 1.2, z: g3.course.finishZ - 1.5 }, true);
 for (let i = 0; i < 120 && g3.state === 'play'; i++) {
   g3.step({ x: 0, jump: false, jumpHeld: false, spin: false });
@@ -134,6 +134,7 @@ for (let li = 0; li < LEVELS.length; li++) {
     h.hazardsOff = true;   // geometry + pace probe: timed hazards are the
                            // human problem, the bot proves the platforming
     h.gatesOff = true;     // placement gates need human racing, not a bot
+    h.pickupsOff = true;   // keep clear-time bands comparable run to run
     const zones = h.course.jumpZones;
     const narrows = h.course.narrows;
     let hold = 0;
@@ -164,26 +165,102 @@ for (let li = 0; li < LEVELS.length; li++) {
     h.disposeWorld();
   }
 }
-// balance guard: bold but bounded — no hero may be more than 1.40× slower
-// than the fastest. (True race fairness comes from rivals scaling to your
-// pick; this only catches a stat regression making one hero unviable.)
+// balance guards. (1) SPEED LAW: max/min roster speed ≤ 1.05 — the roster
+// is balanced by design, identity lives in grip/jump/hearts. (2) Clear-time
+// band ≤ 1.12× catches a stat or level regression making one hero unviable
+// (measured with hazards parked, so it reflects geometry + pace only).
+const speeds = HERO_IDS.map((id) => CHARACTERS[id].speed);
+ok(Math.max(...speeds) / Math.min(...speeds) <= 1.05,
+  `roster speed spread ${(Math.max(...speeds) / Math.min(...speeds)).toFixed(3)}x ≤ 1.05`);
 for (let li = 0; li < LEVELS.length; li++) {
   const ts = levelTimes[li];
   if (!ts.length || !ts.every((e) => e.t > 0)) continue;   // arena: own section
   const fast = Math.min(...ts.map((e) => e.t));
   const slow = ts.reduce((a, e) => (e.t > a.t ? e : a));
-  ok(slow.t / fast <= 1.40,
+  ok(slow.t / fast <= 1.12,
     `${LEVELS[li].id} fair band: ${slow.id} ${slow.t.toFixed(1)}s` +
-    ` vs fastest ${fast.toFixed(1)}s = ${(slow.t / fast).toFixed(2)}x ≤ 1.40`);
+    ` vs fastest ${fast.toFixed(1)}s = ${(slow.t / fast).toFixed(2)}x ≤ 1.12`);
 }
 g.disposeWorld(); g2.disposeWorld(); g3.disposeWorld();
+
+// ---- power-ups: boost rings + jinx orbs -----------------------------------
+console.log('power-ups');
+{
+  const pg = mkGame('hero', 0);
+  pg.hazardsOff = true;
+  const C = pg.course;
+  ok(C.boosts.length >= 2 && C.curses.length >= 1,
+    `shore ships ${C.boosts.length} boosts + ${C.curses.length} jinxes`);
+  const base = CHARACTERS.hero.speed;
+
+  // grab the first boost ring: mod latches, ground speed climbs past base
+  const b = C.boosts[0];
+  pg.player.body.setTranslation({ x: b.x, y: b.y, z: b.z - 0.4 }, true);
+  pg.player.vy = 0;
+  pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  ok(b.taken && pg.player.mod === 1 && pg.player.modT > 180,
+    `boost ring collected (mod=${pg.player.mod}, modT=${pg.player.modT})`);
+  let vmax = 0;
+  for (let i = 0; i < 40; i++) {
+    pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+    vmax = Math.max(vmax, pg.player.vz);
+  }
+  ok(vmax > base * 1.15,
+    `boosted ground run hits ${vmax.toFixed(1)} > base ${base}`);
+
+  // airborne = honest base envelope, jinx or no jinx
+  const j = C.curses[0];
+  pg.player.body.setTranslation({ x: j.x, y: j.y, z: j.z - 0.4 }, true);
+  pg.player.vy = 0;
+  pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  ok(pg.player.mod === -1, 'jinx orb replaces a running boost (no stacking)');
+  pg.player.grounded = false;
+  ok(pg.player.speedMul === 1, 'modifier is ground-only mid-air');
+  pg.player.grounded = true;
+  let vmin = 99;
+  for (let i = 0; i < 40; i++) {
+    pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+    vmin = Math.min(vmin, pg.player.vz);
+  }
+  ok(vmin < base * 0.85, `jinxed ground run drags to ${vmin.toFixed(1)} < base`);
+
+  // both effects time out: modT drains and the ground multiplier returns
+  pg.player.body.setTranslation({ x: 0, y: 1.6, z: 8 }, true);
+  pg.player.vy = 0;
+  for (let i = 0; i < 200 && pg.player.modT > 0; i++) {
+    if (i % 30 === 0) {
+      pg.player.body.setTranslation({ x: 0, y: 1.2, z: 8 }, true);
+    }
+    pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(pg.player.modT === 0 && pg.player.speedMul === 1,
+    'modifier expires, base multiplier restored');
+
+  // dying washes it off; rivals are affected by the same rings
+  pg.player.applyMod(1);
+  pg.player.respawn();
+  ok(pg.player.modT === 0, 'respawn clears any modifier');
+  const rb = C.boosts[1];
+  const rival = pg.rivals[0].player;
+  pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  rival.body.setTranslation({ x: rb.x, y: rb.y, z: rb.z }, true);
+  pg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  ok(rb.taken && rival.mod === 1, 'rivals share the boost rings too');
+  pg.disposeWorld();
+
+  // the arena ships no pickups (it has a ring to keep you honest)
+  const ag = mkGame('hero', 2);
+  ok(ag.course.boosts.length === 0 && ag.course.curses.length === 0,
+    'bumper arena ships zero pickups');
+  ag.disposeWorld();
+}
 
 // ---- 4) scenery is solid ---------------------------------------------------
 // palm trunk at (−6.4, z=2) on the shore shoulder: a hero pushed into it
 // must stop at the bark, not ghost through
 console.log('scenery collisions');
 {
-  const tg = mkGame('rosso', 0);
+  const tg = mkGame('hero', 0);
   tg.player.autoRun = false;
   tg.player.body.setTranslation({ x: -5.0, y: 1.2, z: 2 }, true);
   for (let i = 0; i < 90; i++) {
@@ -228,7 +305,7 @@ console.log('damage + hazards');
   ok(!hit({ hammers: [{ z: 0, harm: Math.PI / 2 }] }, { x: 2.5, y: 0.7, z: 0 }),
     'hammer bar rotated away is safe');
 
-  const wg = mkGame('rosso', 0);
+  const wg = mkGame('hero', 0);
   // integration: a real hero standing in the shore pendulum's path eats a
   // hit from the live game loop (geometry, not just unit math)
   wg.player.autoRun = false;
@@ -250,7 +327,7 @@ console.log('damage + hazards');
   wg.disposeWorld();
 
   // live ridge crumble: stand on it → it gives way → real fall → cp respawn
-  const cg = mkGame('rosso', 1);
+  const cg = mkGame('hero', 1);
   cg.player.autoRun = false;
   cg.player.body.setTranslation({ x: 0, y: 1.2, z: 67.2 }, true);
   const slab = cg.course.crumbles[0];
@@ -278,7 +355,7 @@ console.log('clock + disqualification');
       `${LEVELS[li].id} limit ${LEVELS[li].timeLimit}s ≥ 1.6× slowest bot ` +
       `${slow.toFixed(1)}s`);
   }
-  const dg = mkGame('rosso', 0);
+  const dg = mkGame('hero', 0);
   dg.hazardsOff = true;
   dg.timeLimit = 1;                         // force the clock to run out
   for (let i = 0; i < 120 && dg.state === 'play'; i++) {
@@ -298,7 +375,7 @@ console.log('placement gates');
 {
   // finish with exactly `ahead` rivals beating us, hero otherwise clean
   const gateRun = (level, ahead) => {
-    const gg = mkGame('rosso', level);
+    const gg = mkGame('hero', level);
     gg.hazardsOff = true;
     const fz = gg.course.finishZ;
     gg.player.body.setTranslation({ x: 0, y: 1.2, z: fz - 1.4 }, true);
@@ -339,7 +416,7 @@ console.log('placement gates');
 // stay finite, finish, and yield a sane hero placement.
 console.log('rivals');
 {
-  const rg = mkGame('rosso', 0);
+  const rg = mkGame('hero', 0);
   let hold = 0;
   const zones = rg.course.jumpZones;
   for (let i = 0; i < 3600 && rg.state === 'play'; i++) {
@@ -371,7 +448,7 @@ console.log('rivals');
   // THE GAUNTLET STRESS: on Ridge v2 the rivals must thread the canyon
   // gates, QUEUE at the portcullis and single-file the Needle — live
   // hazards, no bot mercy — and still all come out the far side
-  const rg2 = mkGame('rosso', 1);
+  const rg2 = mkGame('hero', 1);
   const zones2 = rg2.course.jumpZones, narrows2 = rg2.course.narrows;
   let hold2 = 0;
   for (let i = 0; i < 5400 && rg2.state === 'play'; i++) {
@@ -444,7 +521,14 @@ ok(!hp1.walking && Math.abs(hp1.x - 6) < 0.01,
   `hero ends up on node 2 (x=${hp1.x.toFixed(1)})`);
 
 mg.levelIndex = 1;
-ok(mg.advanceFrontier() === 'victory', 'clearing the last stage wins the trophy');
+// an arena win with the ladder unfinished just walks you back to the map
+ok(mg.claimVictory() === 'map' && mg.state === 'map' && mg.frontier === 1,
+  'arena win with stages uncleared only walks you back to the map');
+ok(mg.advanceFrontier() === 'map' && mg.frontier === 2 && mg.state === 'map',
+  'clearing the last race stage advances to the ARENA node (no early trophy)');
+ok(mg.allRacesCleared(), 'race ladder complete');
+ok(mg.claimVictory() === 'victory' && mg.state === 'victory',
+  'trophy = arena win + every race stage cleared');
 mg.disposeWorld();
 
 // ---- 10) survival arena ----------------------------------------------------
@@ -453,7 +537,7 @@ console.log('survival arena');
   const live = (c) => [c.pendulums, c.rollers, c.hammers]
     .reduce((n, arr) => n + arr.filter((h) => h.active).length, 0);
 
-  const sg = mkGame('rosso', 2);
+  const sg = mkGame('hero', 2);
   ok(sg.mode === 'survival' && sg.player.free && sg.rivals.length === 0,
     'arena: free control, no rivals, no auto-run');
   for (let i = 0; i < 90; i++) {
@@ -467,10 +551,10 @@ console.log('survival arena');
   sg.disposeWorld();
 
   // ring closes monotonically, waves only climb, hazard count escalates
-  const rg = mkGame('rosso', 2);
+  const rg = mkGame('hero', 2);
   rg.hazardsOff = true;
-  let mono = true, prevR = rg.ringR, prevW = 1, live0 = 0, live45 = 0;
-  for (let i = 0; i < 60 * 47 && rg.state === 'play'; i++) {
+  let mono = true, prevR = rg.ringR, prevW = 1, live0 = 0, live45 = 0, live55 = 0;
+  for (let i = 0; i < 60 * 57 && rg.state === 'play'; i++) {
     rg.player.body.setTranslation({ x: 0, y: 1.2, z: 0 }, true); // hover the hub
     rg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
     if (rg.ringR > prevR + 1e-9 || rg.wave < prevW) mono = false;
@@ -478,32 +562,54 @@ console.log('survival arena');
     const t = rg.timeF / 60;
     if (t > 0.5 && t < 0.6 && !live0) live0 = live(rg.course);
     if (t > 45.5 && t < 45.7 && !live45) live45 = live(rg.course);
+    if (t > 55 && t < 55.3 && !live55) live55 = live(rg.course);
   }
   ok(mono && rg.state === 'play', 'ring shrinks, waves only ever climb');
-  ok(live0 === 2 && live45 === 6,
-    `waves bring the thunder: ${live0} live hazards at 0.5s, ${live45} at 45s`);
+  ok(live0 === 2 && live45 === 7 && live55 === 8,
+    `waves bring the thunder: ${live0} live at 0.5s, ${live45} at 45s, ` +
+    `all ${live55} by 55s`);
   rg.disposeWorld();
 
   // stand outside the closing ring → the sea takes you
-  const og = mkGame('rosso', 2);
+  const og = mkGame('hero', 2);
   og.hazardsOff = true;
   og.player.body.setTranslation({ x: 0, y: 1.2, z: 9.85 }, true);
   for (let i = 0; i < 60 * 30 && og.state === 'play'; i++) {
     og.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
   }
-  ok(og.state === 'over' && og.survTime > 8,
+  ok(og.state === 'over' && og.survTime > 5,
     `the ring swallows you (over at ${og.survTime?.toFixed(1)}s)`);
   og.disposeWorld();
 
-  // the full gauntlet: 90s alive → LAST STANDING
-  const wg = mkGame('aqua', 2);
+  // the heart pool: flat 4 for every hero; hits bite through it; zero = over
+  const hg = mkGame('hero', 2);
+  ok(hg.player.maxHp === ARENA.hearts && hg.player.hp === ARENA.hearts,
+    `arena ships a flat ${ARENA.hearts}-heart pool`);
+  let bites = 0;
+  for (let i = 0; i < 60 * 30 && hg.state === 'play' && hg.player.hp > 0; i++) {
+    // glue the hero to the live pendulum ball every frame and wink out
+    // the mercy window — testing the accounting, not the dodging
+    const pd = hg.course.pendulums[0];
+    hg.player.body.setTranslation({ x: pd.bx, y: pd.by, z: pd.z }, true);
+    hg.player.vy = 0;
+    hg.player.invuln = 0;
+    const before = hg.player.hp;
+    hg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+    if (hg.player.hp < before) bites++;
+  }
+  ok(hg.state === 'over' && bites === ARENA.hearts,
+    `hits drain the pool → over (bites=${bites}, t=${hg.survTime?.toFixed(1)}s)`);
+  hg.disposeWorld();
+
+  // the full gauntlet: 60s alive → LAST STANDING
+  const wg = mkGame('ghzl', 2);
   wg.hazardsOff = true;
-  for (let i = 0; i < 60 * 92 && wg.state === 'play'; i++) {
+  for (let i = 0; i < 60 * 64 && wg.state === 'play'; i++) {
     wg.player.body.setTranslation({ x: 0, y: 1.2, z: 0 }, true);
     wg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
   }
-  ok(wg.state === 'win' && wg.survTime >= 90,
-    `survive 90 seconds → WIN (t=${(wg.timeF / 60).toFixed(1)}s)`);
+  ok(wg.state === 'win' && wg.survTime >= ARENA.dur,
+    `survive ${ARENA.dur} seconds → WIN (t=${(wg.timeF / 60).toFixed(1)}s)`);
   wg.disposeWorld();
 }
 
