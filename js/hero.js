@@ -10,28 +10,34 @@ import { STEP } from './phys.js';
 
 // speed m/s, accel m/s², jump launch m/s (gravity 26 ⇒ apex ≈ v²/52),
 // hp = hearts, steer = ground steering authority, airCtrl = share of the
-// lateral accel kept in air. Balance law (headless-enforced): clear-time
-// spread across the roster stays ≤ 1.30× — every distinction has a cost.
+// lateral accel kept in air. Speed law (headless-enforced): max/min speed
+// across the roster ≤ 1.05 — nobody outruns anybody, so identity lives in
+// grip, ignition, jump arc and heart count instead.
 export const CHARACTERS = {
-  rosso: { speed: 7.0, accel: 42, friction: 55, jump: 10.8, hp: 2,
-    color: 0xe04a3f, style: 'cap' },
-  bolt:  { speed: 8.2, accel: 56, friction: 50, jump: 10.2, hp: 1,
-    airCtrl: 0.75,                     // speed demon understeers in air
-    color: 0xf2c23e, style: 'cap' },
-  aqua:  { speed: 6.8, accel: 44, friction: 52, jump: 12.6, hp: 1, floaty: true,
-    color: 0x3f9be0, style: 'cap' },
-  faris: { speed: 6.6, accel: 40, friction: 70, jump: 10.2, hp: 3,
-    steer: 1.2,                        // tank with the sharpest cuts
-    color: 0xd8d4c8, style: 'keffiyeh' },
-  sahm:  { speed: 8.4, accel: 72, friction: 10, jump: 8.6, hp: 1,
-    color: 0x58b060, style: 'fletch' }, // brake-slip stays — overshoot king
-  dolar: { speed: 7.4, accel: 46, friction: 55, jump: 10.6, hp: 2,
-    color: 0xb8c4d0, style: 'cap' },    // silver hustler — quick, level head
-  hero:  { speed: 7.0, accel: 44, friction: 58, jump: 11.2, hp: 2,
+  hero:  { speed: 7.2, accel: 44, friction: 58, jump: 11.2, hp: 2,
     color: 0x5560dd, style: 'cap' },    // indigo everyman — does the job
-  scoozy:{ speed: 8.3, accel: 68, friction: 12, jump: 9.4, hp: 1, steer: 1.1,
-    color: 0xe0559a, style: 'fletch' }, // on wheels: darty, sharp, slippery
-  glorious: { speed: 6.9, accel: 44, friction: 66, jump: 10.8, hp: 3,
+  shararah: { speed: 7.45, accel: 64, friction: 50, jump: 10.4, hp: 1,
+    steer: 1.15,                         // spark — best ignition, snappy cuts
+    color: 0xf2683c, style: 'fletch' },
+  yas:   { speed: 7.3, accel: 48, friction: 56, jump: 11.0, hp: 2,
+    color: 0x3fae5a, style: 'cap' },     // confident — nothing fazes him
+  ghzl:  { speed: 7.35, accel: 50, friction: 48, jump: 12.0, hp: 1,
+    floaty: true,                        // silk spinner — big floaty arcs
+    color: 0xc86ad8, style: 'fletch' },
+  wafaa: { speed: 7.3, accel: 50, friction: 66, jump: 11.0, hp: 2,
+    steer: 1.15,                         // loyal heart — never breaks form
+    color: 0x2fae8f, style: 'cap' },
+  duha:  { speed: 7.2, accel: 46, friction: 54, jump: 11.6, hp: 2,
+    airCtrl: 1.25,                       // morning light — glides on air
+    color: 0xffcf9e, style: 'cap' },
+  dolar: { speed: 7.25, accel: 46, friction: 55, jump: 10.6, hp: 2,
+    color: 0xb8c4d0, style: 'cap' },     // silver hustler — quick, level head
+  scoozy:{ speed: 7.45, accel: 60, friction: 12, jump: 9.4, hp: 1, steer: 1.1,
+    color: 0x35c8f0, style: 'fletch' },  // on wheels: icy, sharp, slippery
+  faris: { speed: 7.1, accel: 40, friction: 70, jump: 10.2, hp: 3,
+    steer: 1.2,                          // tank with the sharpest cuts
+    color: 0xd8d4c8, style: 'keffiyeh' },
+  glorious: { speed: 7.15, accel: 44, friction: 66, jump: 10.8, hp: 3,
     steer: 1.1, color: 0xf0b428, style: 'crown' }, // gold tank — dies loudly
 };
 export const HERO_IDS = Object.keys(CHARACTERS);
@@ -47,6 +53,11 @@ const BUFFER = 7;       // frames of pre-land jump memory
 const JUMP_CUT = 0.45;  // early release: cut rise once to this fraction
 const HURT_INVULN = 72; // ~1.2s of mercy after taking a hit
 const HURT_STUN = 16;   // ~0.27s knockback tumble before control returns
+// speed pickups: boost ring ×1.28 for 3.5s, jinx orb ×0.68 for 2.5s. The
+// multiplier applies to GROUND run speed only — once you leave the ground
+// the base envelope returns, so no jinx can ever make a gap unjumpable.
+const BOOST_MUL = 1.28, BOOST_T = 210;
+const JINX_MUL = 0.68, JINX_T = 150;
 
 export class Player {
   // heroId: a CHARACTERS key, or a custom def object (used by AI rivals)
@@ -81,6 +92,9 @@ export class Player {
     this.alive = true;
     this.jumped = false;     // event flags, one-frame pulses for sfx
     this.landed = false;
+    // speed pickup modifier: mod +1 boost / -1 jinx, modT frames left,
+    // modGot one-frame pulse (+1/-1) so the game layer can play a sfx
+    this.mod = 0; this.modT = 0; this.modGot = 0;
     // damage model — hearts drive the "ways to lose"
     this.maxHp = this.def.hp ?? 1;
     this.hp = this.maxHp;
@@ -104,6 +118,21 @@ export class Player {
 
   bounce(v) { this.vy = v; this.grounded = false; this.cutArmed = false; }
 
+  // grab a speed pickup: kind +1 = boost ring, -1 = jinx orb. A new pickup
+  // simply replaces whatever was running — no stacking.
+  applyMod(kind) {
+    this.mod = kind > 0 ? 1 : -1;
+    this.modT = kind > 0 ? BOOST_T : JINX_T;
+    this.modGot = this.mod;
+  }
+
+  // ground-only run multiplier — airborne you always get the honest base
+  // speed, so jump gaps stay exactly as the reachability proofs measured
+  get speedMul() {
+    if (!this.grounded || this.modT <= 0) return 1;
+    return this.mod > 0 ? BOOST_MUL : JINX_MUL;
+  }
+
   get pos() { return this.body.translation(); }
 
   // flags: { x: -1|0|1 steer, jump: edge, jumpHeld: bool, spin: edge,
@@ -113,7 +142,9 @@ export class Player {
     const d = this.def;
     this.jumped = false;
     this.landed = false;
+    this.modGot = 0;
     if (this.invuln > 0) this.invuln -= 1;
+    if (this.modT > 0) this.modT -= 1;
     const stunned = this.stun > 0;
     if (stunned) this.stun -= 1;
 
@@ -123,13 +154,15 @@ export class Player {
     // auto-run along +Z (race) — or, in FREE mode (arena), the z flag
     // drives forward/back and both axes decelerate on their own. Steering
     // blends lateral speed; wind pushes regardless. Stun locks both.
+    const mul = this.speedMul;
     let targetVz, targetVx;
     if (this.free) {
-      targetVz = stunned ? 0 : (flags.z || 0) * d.speed * 0.82;
-      targetVx = stunned ? 0 : flags.x * d.speed * 0.82 * (d.steer ?? 1);
+      targetVz = stunned ? 0 : (flags.z || 0) * d.speed * 0.82 * mul;
+      targetVx = stunned ? 0 : flags.x * d.speed * 0.82 * (d.steer ?? 1) * mul;
     } else {
-      targetVz = this.autoRun && !stunned ? d.speed : 0;
-      const steer = stunned ? 0 : flags.x * d.speed * 0.85 * (d.steer ?? 1);
+      targetVz = this.autoRun && !stunned ? d.speed * mul : 0;
+      const steer =
+        stunned ? 0 : flags.x * d.speed * 0.85 * (d.steer ?? 1) * mul;
       targetVx = steer + (stunned ? 0 : (flags.windX || 0));
     }
     const air = !this.grounded;
@@ -195,6 +228,7 @@ export class Player {
   respawn() {
     this.vx = this.vy = 0; this.vz = 0;
     this.spinT = 0;
+    this.mod = 0; this.modT = 0;   // dying washes the jinx off
     // respawn at a checkpoint = full recovery with a breath of grace
     this.hp = this.maxHp;
     this.dead = false;
