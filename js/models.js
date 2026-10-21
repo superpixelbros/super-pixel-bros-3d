@@ -69,3 +69,29 @@ export function buildHero(def) {
 
   return { group: g, legL, legR, armL, armR, head };
 }
+
+// The trophy: a chunky gold cup in the same boxes-and-cylinders language
+// as the heroes. Origin sits at the grip (bottom of the base) so it can be
+// parented straight to a hand pivot and stay put while the arm swings.
+export function buildTrophy() {
+  const g = new THREE.Group();
+  const gold = new THREE.MeshLambertMaterial({ color: 0xffd23e, emissive: 0x5c4000 });
+  const add = (geo, x, y, z) => {
+    const m = new THREE.Mesh(geo, gold);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    g.add(m);
+    return m;
+  };
+  add(new THREE.BoxGeometry(0.16, 0.05, 0.16), 0, 0.025, 0);          // base
+  add(new THREE.BoxGeometry(0.05, 0.09, 0.05), 0, 0.095, 0);          // stem
+  add(new THREE.CylinderGeometry(0.12, 0.065, 0.16, 12), 0, 0.22, 0); // bowl
+  add(new THREE.CylinderGeometry(0.14, 0.14, 0.03, 12), 0, 0.31, 0);  // rim
+  for (const s of [-1, 1]) {                                          // handles
+    const h = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.018, 6, 14), gold);
+    h.position.set(s * 0.14, 0.22, 0);
+    h.rotation.y = Math.PI / 2;
+    g.add(h);
+  }
+  return g;
+}

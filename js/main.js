@@ -218,12 +218,18 @@ async function boot() {
     }
 
     // menu shows the live hero on the pedestal; select slides it beside
-    // the card, map shows the tiny one
+    // the card, map shows the tiny one; victory reuses the same showcase
+    // with the hero hoisting the trophy next to the card
     if (game.state === 'title' || game.state === 'select') {
       renderer.setHero('menu:' + game.selectedHero());
       renderer.setSelectHero(
         game.state === 'select' ? ui.selectHeroPx() : null);
     }
+    if (game.state === 'victory') {
+      renderer.setHero('menu:' + game.selectedHero());
+      renderer.setSelectHero(ui.victoryHeroPx());
+    }
+    renderer.showTrophy(game.state === 'victory');
     if (game.state === 'play' && game.player) {
       if (game.mode === 'survival') {
         ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur,

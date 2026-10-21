@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { view } from './view.js';
-import { buildHero } from './models.js';
+import { buildHero, buildTrophy } from './models.js';
 import { CHARACTERS, HERO_RADIUS, HERO_HALF } from './hero.js';
 import { LEVELS, ARENA } from './levels.js';
 
@@ -77,7 +77,9 @@ export class Renderer {
 
     this.heroKey = null;   // 'play:hero' | 'menu:hero' | 'map:hero'
     this.heroParts = null;
-    this.selectHero = null; // select-screen anchor { px, py, room } | null
+    this.selectHero = null; // showcase anchor { px, py, room } | null
+    this.trophyMesh = null; // parented to armR while the hero holds the cup
+    this.wantTrophy = false;
     this.menuAngle = 0;
     this.camPos = new THREE.Vector3(0, 3, -9);
     this.camLook = new THREE.Vector3(0, 1.2, 0);
@@ -376,11 +378,42 @@ export class Renderer {
   }
 
   // ---- hero mesh ---------------------------------------------------------
-  // select-screen showcase anchor in CSS px (+ free room); null → center
+  // showcase anchor (select + victory screens) in CSS px (+ free room);
+  // null → center on the pedestal
   setSelectHero(anchor) { this.selectHero = anchor; }
 
+  // victory showcase: the rotating hero carries the gold cup in front of
+  // its chest (both arms forward). The cup is rebuilt per hero because
+  // setHero's dispose traversal reaps the whole hero subtree.
+  showTrophy(on) {
+    on = !!on;
+    if (on === this.wantTrophy) return;
+    this.wantTrophy = on;
+    if (on) { if (this.heroParts) this._attachTrophy(); return; }
+    if (this.trophyMesh) {
+      this.trophyMesh.removeFromParent();
+      this.trophyMesh.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      this.trophyMesh = null;
+    }
+  }
+
+  _attachTrophy() {
+    // carried, not hoisted: the cup sits in BOTH hands in front of the
+    // chest, so it is parented to the hero body (not one arm) and stays
+    // upright as the showcase turns.
+    const tr = buildTrophy();
+    tr.position.set(0, 0.78, 0.36);    // chest height, out in front
+    this.heroParts.group.add(tr);
+    this.trophyMesh = tr;
+  }
+
   setHero(key) {
-    if (key === this.heroKey) return;    if (this.heroParts) {
+    if (key === this.heroKey) return;
+    this.trophyMesh = null;            // any held cup dies with the old subtree
+    if (this.heroParts) {
       this.heroParts.group.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
         if (o.material) o.material.dispose();
@@ -394,6 +427,7 @@ export class Renderer {
     const scale = mode === 'play' ? 0.9 : mode === 'map' ? 0.45 : 1;
     this.heroParts.group.scale.setScalar(scale);
     this.scene.add(this.heroParts.group);
+    if (this.wantTrophy) this._attachTrophy();
     this.heroKey = key;
   }
 
@@ -404,7 +438,7 @@ export class Renderer {
     // hero and driving the follow cam (previously dq froze the camera and
     // teleported the hero back to the menu pedestal)
     const p = (state === 'play' || state === 'pause' || state === 'clear'
-      || state === 'dq' || state === 'lost' || state === 'victory'
+      || state === 'dq' || state === 'lost'
       || state === 'over' || state === 'win')
       ? game.player : null;
 
@@ -486,7 +520,8 @@ export class Renderer {
 
     // which world we're looking at
     this.courseGroup.visible = !!game.course && state !== 'map';
-    this.pedestal.visible = state === 'title' || state === 'select';
+    this.pedestal.visible = state === 'title' || state === 'select'
+      || state === 'victory';
     this.diorama.visible = state === 'map';
 
     if (p) {
@@ -515,8 +550,8 @@ export class Renderer {
 
     // rivals race only inside the course world
     this.rivalGroup.visible = (state === 'play' || state === 'pause'
-      || state === 'clear' || state === 'dq' || state === 'lost'
-      || state === 'victory') && this.rivalParts.length > 0;
+      || state === 'clear' || state === 'dq' || state === 'lost')
+      && this.rivalParts.length > 0;
     if (this.rivalGroup.visible) {
       for (let i = 0; i < game.rivals.length; i++) {
         const p = game.rivals[i].player;
@@ -531,14 +566,16 @@ export class Renderer {
       }
     }
 
-    // menu hero idles on the pedestal, slowly turning; on the select
-    // screen it slides to the free side of the hero card (RTL mirrored)
+    // menu hero idles on the pedestal, slowly turning; on the select AND
+    // victory screens it slides to the free side of the card (RTL mirrored)
     // and the pedestal follows. The menu cam ORBITS, so the UI pixel is
     // re-solved against the ground plane every frame — the hero stays
     // glued to its screen column beside the card while the world swings.
+    // On victory it also carries the gold trophy (showTrophy).
     if (!p && this.heroParts && state !== 'map') {
       const hp = this.heroParts.group;
-      const sel = state === 'select' ? this.selectHero : null;
+      const sel = (state === 'select' || state === 'victory')
+        ? this.selectHero : null;
       let px2 = 0, pz = -14, sc = 1;
       if (sel) {
         sc = Math.max(0.8, Math.min(1.4, sel.room / 340));
@@ -560,8 +597,22 @@ export class Renderer {
       hp.position.set(px2, 0.42 * sc + Math.sin(t * 2) * 0.02, pz);
       hp.rotation.y = t * 0.7;
       const s = Math.sin(t * 4) * 0.12;   // tiny ready-bounce
+      this.heroParts.legL.rotation.x = 0;  // stand tall (run pose may persist)
+      this.heroParts.legR.rotation.x = 0;
       this.heroParts.armL.rotation.x = s;
-      this.heroParts.armR.rotation.x = -s;
+      if (this.trophyMesh) {
+        // victory carry: both arms reach forward, hands converging on the
+        // cup held in front of the chest — no solo spin, the showcase
+        // turn shows it off from every side
+        this.heroParts.armL.rotation.x = -1.35;
+        this.heroParts.armR.rotation.x = -1.35;
+        this.heroParts.armL.rotation.z = 0.3;
+        this.heroParts.armR.rotation.z = -0.3;
+      } else {
+        this.heroParts.armR.rotation.x = -s;
+        this.heroParts.armL.rotation.z = 0;   // the carry tilt must not leak
+        this.heroParts.armR.rotation.z = 0;
+      }
     }
 
     // map hero stands on (or walks between) the diorama nodes
@@ -580,7 +631,7 @@ export class Renderer {
     }
 
     // camera
-    if (state === 'title' || state === 'select') {
+    if (state === 'title' || state === 'select' || state === 'victory') {
       this.menuAngle += 0.004;
       const a = this.menuAngle;
       this.lerpCam(

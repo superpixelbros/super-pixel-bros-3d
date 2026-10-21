@@ -38,7 +38,7 @@ export class UI {
             <p class="keys dim" data-key="select_hint"></p>
           </div>
           <div class="stage-half">
-            <div id="hero-anchor"></div>
+            <div id="hero-anchor" class="anchor"></div>
             <div class="hero-info panel">
               <h3 id="hero-name"></h3>
               <p id="hero-blurb" class="blurb"></p>
@@ -149,11 +149,18 @@ export class UI {
       </div>
 
       <div class="screen hidden" id="sc-victory">
-        <div class="panel card">
-          <div class="trophy gold">🏆</div>
-          <h2 data-key="victory.title"></h2>
-          <p class="trophy-sub" data-key="victory.sub"></p>
-          <button class="btn big accent" id="b-victory" data-key="victory.hint"></button>
+        <div class="select-wrap">
+          <div class="pick-half victory-half">
+            <div class="panel card grow">
+              <div class="trophy gold">🏆</div>
+              <h2 data-key="victory.title"></h2>
+              <p class="trophy-sub" data-key="victory.sub"></p>
+              <button class="btn big accent" id="b-victory" data-key="victory.hint"></button>
+            </div>
+          </div>
+          <div class="stage-half">
+            <div id="victory-anchor" class="anchor"></div>
+          </div>
         </div>
       </div>
 
@@ -223,19 +230,25 @@ export class UI {
     }
   }
 
-  // select-screen anchor: the exact center of the stage half (screen
-  // center vertically, that half's center horizontally). The renderer
-  // parks the rotating hero's body center on it; the live DOM rect means
-  // RTL mirroring comes for free (the halves swap with <html dir>).
-  selectHeroPx() {
-    const a = this.root.querySelector('#hero-anchor').getBoundingClientRect();
-    const s = this.root.querySelector('.stage-half').getBoundingClientRect();
+  // showcase anchor: the exact center of the stage half (screen center
+  // vertically, that half's center horizontally). The renderer parks the
+  // rotating hero's body center on it; the live DOM rect means RTL mirroring
+  // comes for free (the halves swap with <html dir>). Used by the select
+  // screen and the victory card — scope to the screen so the hidden twin
+  // can never answer with a zero rect.
+  _anchorCenter(screenSel) {
+    const a = this.root.querySelector(screenSel + ' .anchor').getBoundingClientRect();
+    const s = this.root.querySelector(screenSel + ' .stage-half').getBoundingClientRect();
     return {
       px: a.left + a.width / 2,
       py: a.top + a.height / 2,
       room: s.width * 0.85,
     };
   }
+
+  selectHeroPx() { return this._anchorCenter('#sc-select'); }
+
+  victoryHeroPx() { return this._anchorCenter('#sc-victory'); }
 
   setHero(index) {
     this.heroIndex = index;
