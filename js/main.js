@@ -3,6 +3,7 @@
 // title / select / map / play / pause / clear / victory.
 
 import Input from './input.js';
+import * as Gamepad from './gamepad.js';
 import { measure, view } from './view.js';
 import { applyLang, toggleLang, t } from './i18n.js';
 import { initPhysics, STEP } from './phys.js';
@@ -16,6 +17,7 @@ import audio from './audio.js';
 const STEP_MS = STEP * 1000;
 const PROGRESS_KEY = 'pixelbros3d_progress';
 const BEST_KEY = 'pixelbros3d_arena_best';   // survival record (ARENA.dur = win)
+const INPUT_KEY = 'pixelbros3d_input';       // 'keyboard' | 'controller'
 
 async function boot() {
   measure();
@@ -36,6 +38,16 @@ async function boot() {
   let survBest = 0;
   let survSaved = true;          // one-shot per survival run
   try { survBest = parseFloat(localStorage.getItem(BEST_KEY)) || 0; } catch { /* */ }
+  // input device (title-screen segment): keyboard is the default — the pad
+  // never drives until the player opts in; controller mode keeps the
+  // keyboard alive too, so a dead pad battery can never lock anyone out
+  let inputMode = 'keyboard';
+  try {
+    inputMode = localStorage.getItem(INPUT_KEY) === 'controller'
+      ? 'controller' : 'keyboard';
+  } catch { /* private mode: keyboard */ }
+  Gamepad.init();
+  Gamepad.setEnabled(inputMode === 'controller');
   const saveSurvBest = (t) => {
     if (t <= survBest) return false;
     survBest = t;
@@ -47,6 +59,13 @@ async function boot() {
   const uiRoot = document.getElementById('ui');
   const ui = new UI(uiRoot, {
     onStart: toSelect,
+    onInputDevice: (m) => {
+      inputMode = m === 'controller' ? 'controller' : 'keyboard';
+      try { localStorage.setItem(INPUT_KEY, inputMode); } catch { /* */ }
+      Gamepad.setEnabled(inputMode === 'controller');
+      ui.setInputMode(inputMode);
+      audio.sfx('select');
+    },
     onMove: (d) => { game.moveCursor(d); ui.setHero(game.heroIndex); },
     onPick: (i) => { game.heroIndex = i; ui.setHero(i); audio.sfx('select'); },
     onPlay: toMap,
@@ -134,6 +153,7 @@ async function boot() {
   // edge-triggered flags must fire exactly once even when a slow frame
   // runs several physics ticks
   let jumpEdge = false, spinEdge = false, zAxis = 0;
+  let pauseOpt = 0;          // highlighted pause-menu option (0 resume, 1 retry, 2 title)
 
   function handleKeys() {
     const s = game.state;
@@ -149,9 +169,13 @@ async function boot() {
       if (Input.pressed('ArrowLeft') || Input.pressed('KeyA')) { game.mapMove(-1); audio.sfx('select'); updateMapUI(); }
       if (Input.pressed('ArrowRight') || Input.pressed('KeyD')) { game.mapMove(1); audio.sfx('select'); updateMapUI(); }
       if (Input.pressed('Enter') || Input.pressed('Space')) startLevel(game.map.cursor);
-      if (Input.pressed('KeyQ')) toTitle();
+      // ESC is the pad's ◯: back out of the map to the title (like Q)
+      if (Input.pressed('KeyQ') || Input.pressed('Escape')) toTitle();
     } else if (s === 'play') {
-      if (Input.pressed('Escape')) { game.pause(); audio.duck(true); ui.show('pause'); }
+      if (Input.pressed('Escape')) {
+        game.pause(); audio.duck(true); ui.show('pause');
+        pauseOpt = 0; ui.setPauseFocus(0);   // Start/ESC always opens on Resume
+      }
       if (Input.pressed('KeyR')) startLevel(game.levelIndex);
       // survival: Space is the ONLY jump (W/↑ drive the free-control rig);
       // racing: Space/W/↑ all hop
@@ -162,26 +186,44 @@ async function boot() {
       }
       spinEdge = Input.pressed('ArrowDown') || Input.pressed('KeyS') || Input.pressed('ShiftLeft');
       // survival free-control throttle (race auto-run ignores this flag):
-      // W/↑ drives toward +Z, S/↓ backs up
-      zAxis = (Input.isDown('KeyW') || Input.isDown('ArrowUp') ? 1 : 0)
+      // W/↑ drives toward +Z, S/↓ backs up; the stick feeds analog drive
+      // through Gamepad.throttle when nothing is held on the keyboard
+      const kbZ = (Input.isDown('KeyW') || Input.isDown('ArrowUp') ? 1 : 0)
         - (Input.isDown('KeyS') || Input.isDown('ArrowDown') ? 1 : 0);
+      zAxis = kbZ !== 0 ? kbZ : Gamepad.getThrottle();
     } else if (s === 'pause') {
-      if (Input.pressed('Escape')) resume();
-      if (Input.pressed('KeyR')) startLevel(game.levelIndex);
-      if (Input.pressed('KeyQ')) toTitle();
+      // pause menu: ↑↓ (d-pad/stick too) cycle the highlighted option,
+      // ✕/Enter picks it — ESC (or Start's ESC half) resumes; resume is
+      // ordered FIRST so Start (ESC+Q) can never fall through to title
+      if (Input.pressed('Escape')) { resume(); }
+      else {
+        if (Input.pressed('ArrowUp') || Input.pressed('KeyW')) {
+          pauseOpt = (pauseOpt + 2) % 3; ui.setPauseFocus(pauseOpt); audio.sfx('select');
+        }
+        if (Input.pressed('ArrowDown') || Input.pressed('KeyS')) {
+          pauseOpt = (pauseOpt + 1) % 3; ui.setPauseFocus(pauseOpt); audio.sfx('select');
+        }
+        if (Input.pressed('KeyR')) startLevel(game.levelIndex);
+        else if (Input.pressed('Enter') || Input.pressed('Space')) {
+          if (pauseOpt === 0) resume();
+          else if (pauseOpt === 1) startLevel(game.levelIndex);
+          else toTitle();
+        }
+        else if (Input.pressed('KeyQ')) toTitle();
+      }
     } else if (s === 'clear') {
       if (Input.pressed('Enter')) handleDone();
     } else if (s === 'dq') {
       if (Input.pressed('Enter')) startLevel(game.levelIndex);
-      if (Input.pressed('KeyQ')) toTitle();
+      if (Input.pressed('KeyQ') || Input.pressed('Escape')) toTitle();
     } else if (s === 'lost') {
       if (Input.pressed('Enter')) startLevel(game.levelIndex);
-      if (Input.pressed('KeyQ')) toTitle();
+      if (Input.pressed('KeyQ') || Input.pressed('Escape')) toTitle();
     } else if (s === 'victory') {
       if (Input.pressed('Enter')) toTitle();
     } else if (s === 'over') {
       if (Input.pressed('Enter')) startLevel(game.levelIndex);
-      if (Input.pressed('KeyQ')) toTitle();
+      if (Input.pressed('KeyQ') || Input.pressed('Escape')) toTitle();
     } else if (s === 'win') {
       if (Input.pressed('Enter')) winDone();
     }
@@ -197,6 +239,8 @@ async function boot() {
     if (dt > 250) dt = 250;
     acc += dt;
 
+    // pad edges must land before key routing reads this frame's presses
+    Gamepad.poll();
     handleKeys();
 
     while (acc >= STEP_MS) {
@@ -230,6 +274,8 @@ async function boot() {
       renderer.setSelectHero(ui.victoryHeroPx());
     }
     renderer.showTrophy(game.state === 'victory');
+    // title row shows pad presence (poll runs in every mode for this)
+    if (game.state === 'title') ui.setPadStatus(Gamepad.isConnected());
     if (game.state === 'play' && game.player) {
       if (game.mode === 'survival') {
         ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur,
@@ -270,6 +316,8 @@ async function boot() {
 
   ui.show('title');
   ui.setHero(0);
+  ui.setInputMode(inputMode);
+  ui.setPadStatus(false);
   requestAnimationFrame(frame);
 
   // PWA service worker — never on localhost, so the no-store dev server

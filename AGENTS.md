@@ -82,6 +82,7 @@ after ANY edit to `levels.js`, `hero.js`, `game.js` or `rivals.js`.
 | `js/ui.js` | DOM screens (title/select/HUD+place+hearts+countdown / survival HUD (wave + survive-countdown + hearts)/pause/clear/**dq**/**lost**/**over**/**win**/map/victory) with `data-key` re-render on language change; timer turns gold <25% and pulses red <10% of the limit; 1st place makes the clear trophy glow gold; the win card locks the trophy (line + button) until `allRacesCleared`; `selectHeroPx()` / `victoryHeroPx()` publish the split-screen showcase anchors (center of the stage half, from the live `.anchor` rect scoped per screen, RTL-mirrored) for the renderer; the victory card is a split layout like select (card half + trophy-hero half) |
 | `js/i18n.js` | en/ar tables, `t()`, `L` toggle, `<html lang/dir>`; `pixelbros3d_lang` |
 | `js/input.js` | keyboard + virtual keys, edge triggers, `endFrame()` — ported 1:1 from 2D |
+| `js/gamepad.js` | browser gamepad source (imported by main only): polls the native W3C Gamepad API — zero deps, the runtime-deps cap holds — and feeds standard-mapping presses (F710 in XInput mode) into `Input` as the SAME virtual key codes (✕ = jump + `Enter` confirm on every card, ◯ = `Escape` universal back: pause/resume, map/cards→title, Y = `Enter`, Start = `Escape`+`KeyQ` — opens/resumes pause mid-run, quits to title on map & cards, RB = spin, stick X + d-pad = steer, d-pad up/down = arrows; pause menu: ↑↓/stick cycles the highlighted option, ✕ picks). Stick Y stays OUT of the arrow codes (it would fire race jumps) — survival reads `Gamepad.getThrottle()` (analog, deadzone 0.3, forward = +1). Tracks its own holds so an unplug never sticks a key; `setEnabled()` gates the title-screen INPUT DEVICE setting (`pixelbros3d_input`: keyboard default, controller mode keeps the keyboard alive too — no lock-out); the pad getter is injectable so Node smoke tests fake a pad |
 | `js/view.js` | viewport metrics: dpr cap 2, portrait/coarse flags |
 | `sw.js` | versioned precache incl. `vendor/` — bump `VERSION` on ANY change |
 | `manifest.webmanifest` | standalone, landscape, relative scope |
@@ -90,7 +91,9 @@ after ANY edit to `levels.js`, `hero.js`, `game.js` or `rivals.js`.
 `levels.js`, `rivals.js`, `phys.js`, `i18n.js`, `input.js` must never import
 three.js or touch the DOM (i18n/audio guard `document`/`localStorage`
 behind `typeof`), so they run under plain Node for headless checks.
-`renderer.js`/`models.js`/`ui.js`/`main.js`/`audio.js` are the browser edge.
+`renderer.js`/`models.js`/`ui.js`/`main.js`/`audio.js`/`gamepad.js` are the
+browser edge (`gamepad.js` is Node-safe anyway — `navigator` behind `typeof`,
+pad getter injectable).
 
 ## Rapier gotchas (0.21 — the docs online are mostly older)
 
@@ -270,6 +273,12 @@ behind `typeof`), so they run under plain Node for headless checks.
   pulsing foot-ring aura on the hero (gold/purple); SFX `boost`/`jinx`.
   Arena ships zero pickups — the closing ring is punishment enough.
 - Controls: `L` language, `M` mute, `ESC` pause, `R` retry, `Q` title.
+  Gamepad (title → INPUT DEVICE → CONTROLLER, persisted): ✕ jump +
+  confirm (every card, map launch), ◯ back (pause↔resume, map/cards→
+  title), Y confirm, Start = pause mid-run / Q elsewhere, RB spin, left
+  stick/d-pad steer, stick Y = survival throttle; pause menu navigates
+  with ↑↓/stick (gold highlight) and ✕ picks Resume/Restart/Title;
+  keyboard stays live in controller mode.
   Audio unlocks on first gesture; music ducks while paused.
 - UI text goes through `t('key')` with entries in **both** en and ar
   tables; Arabic is real DOM so shaping/RTL are native — keep Latin key

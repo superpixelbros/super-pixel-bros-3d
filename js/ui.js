@@ -14,6 +14,7 @@ export class UI {
     this.root = root;
     this.cb = cb;
     this.heroIndex = 0;
+    this.padOn = null;          // last published gamepad status
     this.root.innerHTML = `
       <div class="screen" id="sc-title">
         <div class="panel center grow">
@@ -22,6 +23,14 @@ export class UI {
           <button class="btn big" id="b-start" data-key="press_enter"></button>
           <p class="keys"><span data-key="controls.move"></span></p>
           <p class="keys dim"><span data-key="controls.actions"></span></p>
+          <div class="input-row">
+            <span class="input-label" data-key="input.device"></span>
+            <div class="seg">
+              <button class="btn seg-btn" id="b-in-kb" data-key="input.keyboard"></button>
+              <button class="btn seg-btn" id="b-in-pad" data-key="input.controller"></button>
+            </div>
+            <span class="pad-status">🎮 <span id="pad-status"></span></span>
+          </div>
         </div>
       </div>
 
@@ -167,6 +176,8 @@ export class UI {
       <div class="rotate hidden" id="rotate" data-key="rotate"></div>
     `;
     this.bind('b-start', () => this.cb.onStart());
+    this.bind('b-in-kb', () => this.cb.onInputDevice('keyboard'));
+    this.bind('b-in-pad', () => this.cb.onInputDevice('controller'));
     this.bind('b-prev', () => this.cb.onMove(-1));
     this.bind('b-next', () => this.cb.onMove(1));
     this.bind('b-play', () => this.cb.onPlay());
@@ -213,7 +224,31 @@ export class UI {
       el.querySelector('.hname').textContent =
         t(`hero.${HERO_IDS[+el.dataset.i]}.name`);
     });
+    this.padOn = null;   // force the pad-status line to re-translate
     this.setHero(this.heroIndex);
+  }
+
+  // INPUT DEVICE segment on the title screen: who drives — keyboard or pad
+  setInputMode(mode) {
+    this.root.querySelector('#b-in-kb').classList.toggle('on',
+      mode === 'keyboard');
+    this.root.querySelector('#b-in-pad').classList.toggle('on',
+      mode === 'controller');
+  }
+
+  // gamepad presence for the title row; text only re-renders on change
+  setPadStatus(on) {
+    if (on === this.padOn) return;
+    this.padOn = on;
+    this.root.querySelector('#pad-status').textContent =
+      t(on ? 'input.padYes' : 'input.padNo');
+  }
+
+  // pause-menu highlight: ↑↓/stick cycles Resume/Restart/Title, ✕ picks
+  setPauseFocus(i) {
+    ['b-resume', 'b-retry', 'b-title'].forEach((id, n) => {
+      this.root.querySelector('#' + id).classList.toggle('focus', n === i);
+    });
   }
 
   show(name) {

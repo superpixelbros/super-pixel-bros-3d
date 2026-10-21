@@ -86,6 +86,31 @@ html, body {
 .keys { margin-top: 18px; font-size: 12px; letter-spacing: 0.12em; }
 .dim { color: var(--dim); }
 
+/* ---- input-device row (title): KEYBOARD | CONTROLLER + pad presence ---- */
+.input-row {
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 12px; margin-top: 20px;
+}
+.input-label { font-size: 12px; letter-spacing: 0.14em; color: var(--dim); }
+.seg { display: flex; gap: 6px; }
+.seg-btn {
+  padding: 8px 16px; font-size: 12px; border-radius: 10px;
+  background: var(--panel-2); color: var(--dim);
+  border: 1px solid var(--edge); box-shadow: none;
+}
+.seg-btn.on {
+  background: var(--gold); color: #08220f; border-color: transparent;
+  box-shadow: 0 0 14px rgba(255, 210, 62, 0.45);
+}
+.pad-status { font-size: 12px; letter-spacing: 0.08em; color: var(--dim); }
+
+/* pause-menu option highlight (arrows/stick + ✕ selection) */
+#sc-pause .btn.focus {
+  outline: 3px solid var(--gold);
+  box-shadow: 0 0 18px rgba(255, 210, 62, 0.55);
+  transform: scale(1.05);
+}
+
 /* ---- select: split screen — a grid of hero cards on one half, the
    rotating 3D showcase on the other (centered in its half, mid-screen
    vertically). DOM order flips with <html dir>, so RTL mirrors for free;
