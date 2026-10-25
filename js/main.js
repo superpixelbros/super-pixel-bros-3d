@@ -8,8 +8,8 @@ import { measure, view } from './view.js';
 import { applyLang, toggleLang, t } from './i18n.js';
 import { initPhysics, STEP } from './phys.js';
 import Game from './game.js';
-import { LEVELS, ARENA } from './levels.js';
-import { placement } from './rivals.js';
+import { LEVELS, ARENA, CRATES } from './levels.js';
+import { HERO_IDS, stepHeroGrid } from './hero.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 import audio from './audio.js';
@@ -46,8 +46,20 @@ async function boot() {
     inputMode = localStorage.getItem(INPUT_KEY) === 'controller'
       ? 'controller' : 'keyboard';
   } catch { /* private mode: keyboard */ }
+
+  // two-player settings: PLAYERS (needs a pad) and SPLIT orientation
+  let twoPlayer = false;
+  let splitMode = 'v';
+  let selectPass = 0;            // select screen: 0 = P1 picks, 1 = P2
+  let slots = ['keys', null];    // per-player device: 'pad' | 'keys'
+  try {
+    twoPlayer = localStorage.getItem('pixelbros3d_players') === '2';
+    splitMode = localStorage.getItem('pixelbros3d_split') === 'h' ? 'h' : 'v';
+  } catch { /* private mode: defaults */ }
+  const canTwo = () => Gamepad.padCount() > 0;
+
   Gamepad.init();
-  Gamepad.setEnabled(inputMode === 'controller');
+  Gamepad.setEnabled(inputMode === 'controller' || twoPlayer);
   const saveSurvBest = (t) => {
     if (t <= survBest) return false;
     survBest = t;
@@ -62,12 +74,13 @@ async function boot() {
     onInputDevice: (m) => {
       inputMode = m === 'controller' ? 'controller' : 'keyboard';
       try { localStorage.setItem(INPUT_KEY, inputMode); } catch { /* */ }
-      Gamepad.setEnabled(inputMode === 'controller');
+      // 2P always needs the pads, whatever the 1P input preference says
+      Gamepad.setEnabled(inputMode === 'controller' || twoPlayer);
       ui.setInputMode(inputMode);
       audio.sfx('select');
     },
-    onMove: (d) => { game.moveCursor(d); ui.setHero(game.heroIndex); },
-    onPick: (i) => { game.heroIndex = i; ui.setHero(i); audio.sfx('select'); },
+    onMove: (d) => movePick(d),
+    onPick: (i) => pickHero(i),
     onPlay: toMap,
     onResume: resume,
     onRetry: () => startLevel(game.levelIndex),
@@ -76,6 +89,8 @@ async function boot() {
     onMapPlay: () => startLevel(game.map.cursor),
     onDone: handleDone,
     onWinDone: winDone,
+    onPlayers: setPlayersMode,
+    onSplit: setSplitMode,
   });
 
   const rotateEl = document.getElementById('rotate');
@@ -91,7 +106,80 @@ async function boot() {
   }
   updateRotateHint();
 
-  function toSelect() { game.state = 'select'; audio.sfx('select'); syncMenu(); }
+  function setPlayersMode(n) {
+    twoPlayer = n === 2 && canTwo();
+    try {
+      localStorage.setItem('pixelbros3d_players', twoPlayer ? '2' : '1');
+    } catch { /* */ }
+    if (twoPlayer) Gamepad.setEnabled(true);   // 2P always needs the pad
+    ui.setPlayers(twoPlayer ? 2 : 1, canTwo(), Gamepad.padCount());
+    audio.sfx('select');
+  }
+
+  function setSplitMode(m) {
+    splitMode = m === 'h' ? 'h' : 'v';
+    try { localStorage.setItem('pixelbros3d_split', splitMode); } catch { /* */ }
+    ui.setSplit(splitMode);
+    renderer.setSplit(twoPlayer, splitMode);
+    audio.sfx('select');
+  }
+
+  // device assignment follows the pads that are ACTUALLY connected:
+  // 2 pads → both players on pads; 1 pad → P1 pad, P2 keyboard (2P is
+  // gated on a pad, so a keyboard-only 2P setup can never happen).
+  // In 1P the pad only drives when controller mode is selected.
+  function assignSlots() {
+    const pads = Gamepad.padCount();
+    if (!twoPlayer) {
+      slots = pads > 0 && inputMode === 'controller'
+        ? ['pad', null] : ['keys', null];
+      return;
+    }
+    if (pads === 0) return;               // keep the last binding on a drop
+    slots = pads >= 2 ? ['pad0', 'pad1'] : ['pad0', 'keys'];
+  }
+
+  const padFlags = (s = {}, playing) => ({
+    // `|| 0` / `!!`: a slot must never leak undefined into Player.step
+    // (flags.x * speed = NaN freezes that player's physics for the run)
+    x: playing ? -(s.x || 0) : 0,
+    z: playing ? (s.z || 0) : 0,
+    jump: !!(playing && s.jumpPressed),
+    jumpHeld: !!(playing && s.jump),
+    spin: !!(playing && s.spin),
+  });
+
+  // pad-driven menu navigation: edges straight from the slot layer, so a
+  // pad can pick a hero even when Input injection is disabled
+  function padNav(slots) {
+    let dx = 0, dy = 0, confirm = false;
+    for (const s of slots || []) {
+      if (!s || !s.connected) continue;
+      if (!dx) dx = (s.right ? 1 : 0) - (s.left ? 1 : 0);
+      if (!dy) dy = (s.down ? 1 : 0) - (s.up ? 1 : 0);
+      confirm = confirm || !!s.jumpPressed;
+    }
+    return { dx, dy, confirm };
+  }
+
+  // 1P controller mode keeps the KEYBOARD live too (dead battery = no
+  // lock-out): merge both streams
+  const mergeFlags = (kb, pad) => ({
+    x: kb.x !== 0 ? kb.x : pad.x,
+    z: kb.z !== 0 ? kb.z : pad.z,
+    jump: kb.jump || pad.jump,
+    jumpHeld: kb.jumpHeld || pad.jumpHeld,
+    spin: kb.spin || pad.spin,
+  });
+
+  function toSelect() {
+    selectPass = 0;
+    if (twoPlayer) Gamepad.setEnabled(true);   // P2's pad must be live here
+    game.state = 'select';
+    ui.setSelectPass(0);
+    audio.sfx('select');
+    syncMenu();
+  }
   function toMap() {
     game.enterMap(true);   // fresh run: map always opens on stage 1
     audio.setTheme(0);
@@ -108,10 +196,82 @@ async function boot() {
     }
     ui.setMap(c + 1, t(lvl.nameKey), c < game.frontier);
   }
+  // select-screen hero picking: pass 0 edits P1, pass 1 edits P2.
+  // Horizontal wraps around the row; vertical steps exactly one ROW using
+  // the grid's live column count and NEVER leaves the grid — the last row
+  // is short, so a Down from it simply stays put instead of jumping
+  // columns.
+  function movePick(dx, dy = 0) {
+    const p2 = twoPlayer && selectPass === 1;
+    const cur = p2 ? game.hero2Index : game.heroIndex;
+    const next = stepHeroGrid(cur, dx, dy, ui.gridColumns(), HERO_IDS.length);
+    if (next === cur) return;
+    if (p2) game.hero2Index = next;
+    else game.heroIndex = next;
+    ui.setHero(next);
+    audio.sfx('select');
+  }
+  function pickHero(i) {
+    if (twoPlayer && selectPass === 1) {
+      game.hero2Index = i;
+      ui.setHero(i);
+    } else {
+      game.heroIndex = i;
+      ui.setHero(i);
+    }
+    audio.sfx('select');
+  }
+
+  // P2 HUD (split screen): mirrors the active mode's essentials
+  const mmss = (s) => {
+    const v = Math.max(0, s);
+    return `${Math.floor(v / 60)}:${String(Math.floor(v % 60)).padStart(2, '0')}`;
+  };
+  function hud2Update() {
+    const P2 = game.players[1];
+    const r2 = game.runs[1];
+    if (game.mode === 'crates') {
+      ui.hud2(t('hud.crates', { n: game.cratesLeft }), mmss(game.timeF / 60), '');
+      return;
+    }
+    if (game.mode === 'survival') {
+      ui.hud2(`♥ ${Math.max(0, P2.hp)}/${P2.maxHp}`,
+        t('hud.survive', { t: mmss(ARENA.dur - game.timeF / 60) }),
+        t('hud.wave', { n: game.wave }));
+      return;
+    }
+    const hearts = '♥'.repeat(Math.max(0, P2.hp))
+      + '♡'.repeat(Math.max(0, P2.maxHp - P2.hp));
+    ui.hud2(
+      t('hud.coins', { n: `${r2.coins} / ${game.course.coinTotal}` }),
+      t('hud.time', { t: mmss(game.timeLimit - game.timeF / 60) }),
+      `${t('hud.place', { p: game.aiPlace(r2), m: 4 })}  ${hearts}`);
+  }
+  function dualState() {
+    if (!game.runs || game.runs.length < 2) return '';
+    const st = (run) => run.out ? t('state.out') : t('state.dry');
+    return `${t('p1')} ${st(game.runs[0])} · ${t('p2')} ${st(game.runs[1])}`;
+  }
+
   // (re)build a run for stage levelIndex
   function startLevel(levelIndex) {
-    game.start(levelIndex);
+    // 2P is gated on a live controller — if the pad vanished, run 1P rather
+    // than handing player 1 a dead stick
+    if (twoPlayer && Gamepad.padCount() === 0) {
+      twoPlayer = false;
+      try { localStorage.setItem('pixelbros3d_players', '1'); } catch { /* */ }
+      ui.setPlayers(1, canTwo(), Gamepad.padCount());
+    }
+    if (twoPlayer) Gamepad.setEnabled(true);   // 2P always needs the pads
+    assignSlots();
+    game.start(levelIndex, { twoPlayer, hero2Index: game.hero2Index });
     survSaved = false;           // fresh survival attempt: arm the best-save
+    ui.modeCards(game.mode);     // arena vs crate-cove wording on the cards
+    ui.setPlayers(twoPlayer ? 2 : 1, canTwo(), Gamepad.padCount());
+    document.body.classList.toggle('split-v', twoPlayer && splitMode === 'v');
+    document.body.classList.toggle('split-h', twoPlayer && splitMode === 'h');
+    renderer.setSplit(twoPlayer, splitMode);
+    renderer.setP2Hero(twoPlayer ? game.selectedHero2() : null);
     renderer.buildCourse(game.course);
     renderer.setRivals(game.rivals);
     renderer.setHero('play:' + game.selectedHero());
@@ -123,6 +283,9 @@ async function boot() {
   function resume() { game.resume(); audio.duck(false); ui.show('play'); }
   function toTitle() { game.toTitle(); audio.duck(false); syncMenu(); }
   function syncMenu() {
+    document.body.classList.remove('split-v', 'split-h');
+    renderer.setSplit(false);
+    renderer.setP2Hero(null);
     ui.show(game.state);
     ui.setHero(game.heroIndex);
   }
@@ -137,8 +300,10 @@ async function boot() {
     updateMapUI();
   }
   // ENTER on the arena's win card: trophy if the race ladder is done,
-  // otherwise back to the map — the locked card already said what is owed
+  // otherwise back to the map — the locked card already said what is owed.
+  // A Crate Cove win is simply a cleared frontier stage: walk onward.
   function winDone() {
+    if (game.mode === 'crates') { handleDone(); return; }
     if (game.claimVictory() === 'victory') {
       audio.sfx('trophy');
       ui.show('victory');
@@ -155,16 +320,43 @@ async function boot() {
   let jumpEdge = false, spinEdge = false, zAxis = 0;
   let pauseOpt = 0;          // highlighted pause-menu option (0 resume, 1 retry, 2 title)
 
-  function handleKeys() {
+  function handleKeys(padSlots = []) {
     const s = game.state;
     if (Input.pressed('KeyL')) { toggleLang(); ui.renderTexts(); }
     if (Input.pressed('KeyM')) audio.toggleMute();
     if (s === 'title') {
       if (Input.pressed('Enter') || Input.pressed('Space')) toSelect();
+      // quick settings without the mouse: 1/2 players, V/H split
+      if (Input.pressed('Digit2')) setPlayersMode(2);
+      if (Input.pressed('Digit1')) setPlayersMode(1);
+      if (Input.pressed('KeyV')) setSplitMode('v');
+      if (Input.pressed('KeyH')) setSplitMode('h');
     } else if (s === 'select') {
-      if (Input.pressed('ArrowLeft') || Input.pressed('KeyA')) { game.moveCursor(-1); ui.setHero(game.heroIndex); }
-      if (Input.pressed('ArrowRight') || Input.pressed('KeyD')) { game.moveCursor(1); ui.setHero(game.heroIndex); }
-      if (Input.pressed('Enter') || Input.pressed('Space')) toMap();
+      // both pads and the keyboard drive the ACTIVE picker; pad edges come
+      // straight from the slot layer so P2 can always choose with a pad
+      const pNav = padNav(padSlots);
+      const dx = pNav.dx
+        || (Input.pressed('ArrowRight') || Input.pressed('KeyD') ? 1 : 0)
+        - (Input.pressed('ArrowLeft') || Input.pressed('KeyA') ? 1 : 0);
+      const dy = pNav.dy
+        || (Input.pressed('ArrowDown') || Input.pressed('KeyS') ? 1 : 0)
+        - (Input.pressed('ArrowUp') || Input.pressed('KeyW') ? 1 : 0);
+      if (dx || dy) movePick(dx, dy);
+      if (pNav.confirm || Input.pressed('Enter') || Input.pressed('Space')) {
+        if (twoPlayer && selectPass === 0) {
+          selectPass = 1;
+          if (game.hero2Index === game.heroIndex) {
+            game.hero2Index = (game.heroIndex + 1) % HERO_IDS.length;
+          }
+          ui.setSelectPass(1);
+          ui.setHero(game.hero2Index);
+          audio.sfx('select');
+        } else {
+          selectPass = 0;
+          ui.setSelectPass(0);
+          toMap();
+        }
+      }
     } else if (s === 'map') {
       if (Input.pressed('ArrowLeft') || Input.pressed('KeyA')) { game.mapMove(-1); audio.sfx('select'); updateMapUI(); }
       if (Input.pressed('ArrowRight') || Input.pressed('KeyD')) { game.mapMove(1); audio.sfx('select'); updateMapUI(); }
@@ -177,9 +369,9 @@ async function boot() {
         pauseOpt = 0; ui.setPauseFocus(0);   // Start/ESC always opens on Resume
       }
       if (Input.pressed('KeyR')) startLevel(game.levelIndex);
-      // survival: Space is the ONLY jump (W/↑ drive the free-control rig);
-      // racing: Space/W/↑ all hop
-      if (game.mode === 'survival') {
+      // free modes (arena + crate cove): Space is the ONLY jump (W/↑ drive
+      // the free-control rig); racing: Space/W/↑ all hop
+      if (game.mode !== 'race') {
         jumpEdge = Input.pressed('Space');
       } else {
         jumpEdge = Input.pressed('Space') || Input.pressed('ArrowUp') || Input.pressed('KeyW');
@@ -239,22 +431,40 @@ async function boot() {
     if (dt > 250) dt = 250;
     acc += dt;
 
-    // pad edges must land before key routing reads this frame's presses
-    Gamepad.poll();
-    handleKeys();
+    // pad edges must land before key routing reads this frame's presses;
+    // during a run the pads feed player slots directly, so only MENU codes
+    // are injected into Input (pause/restart) — gameplay never double-feeds
+    const padSlots = Gamepad.pollSlots();
+    // live rebinding: a pad that wakes mid-run joins its player, and one
+    // that drops hands that player back to the keyboard (never a dead stick)
+    if (game.state === 'play') assignSlots();
+    Gamepad.poll(game.state === 'play'
+      ? { only: ['Escape', 'KeyQ', 'Enter', 'KeyR', 'KeyM', 'KeyL'] }
+      : {});
+    handleKeys(padSlots);
 
     while (acc >= STEP_MS) {
       const playing = game.state === 'play';
       // camera faces +Z, so world +X is screen-LEFT — steering is inverted
-      game.step({
+      const kb = {
         x: playing ? -Input.axisX() : 0,
         z: playing ? zAxis : 0,
         jump: playing && jumpEdge,
         jumpHeld: playing && (Input.isDown('Space')
-          || (game.mode !== 'survival'
+          || (game.mode === 'race'
             && (Input.isDown('ArrowUp') || Input.isDown('KeyW')))),
         spin: playing && spinEdge,
-      });
+      };
+      let stepFlags = kb;
+      if (game.twoPlayer) {
+        stepFlags = [
+          slots[0] === 'keys' ? kb : padFlags(padSlots[0], playing),
+          slots[1] === 'keys' ? kb : padFlags(padSlots[1], playing),
+        ];
+      } else if (slots[0] === 'pad') {
+        stepFlags = mergeFlags(kb, padFlags(padSlots[0], playing));
+      }
+      game.step(stepFlags);
       game.mapStep();
       jumpEdge = false;
       spinEdge = false;
@@ -265,7 +475,9 @@ async function boot() {
     // the card, map shows the tiny one; victory reuses the same showcase
     // with the hero hoisting the trophy next to the card
     if (game.state === 'title' || game.state === 'select') {
-      renderer.setHero('menu:' + game.selectedHero());
+      const pick = (game.state === 'select' && twoPlayer && selectPass === 1)
+        ? game.hero2Index : game.heroIndex;
+      renderer.setHero('menu:' + HERO_IDS[pick]);
       renderer.setSelectHero(
         game.state === 'select' ? ui.selectHeroPx() : null);
     }
@@ -274,16 +486,32 @@ async function boot() {
       renderer.setSelectHero(ui.victoryHeroPx());
     }
     renderer.showTrophy(game.state === 'victory');
-    // title row shows pad presence (poll runs in every mode for this)
-    if (game.state === 'title') ui.setPadStatus(Gamepad.isConnected());
+    // split-screen styling only while the run world is on screen
+    const splitOn = twoPlayer && (game.state === 'play' || game.state === 'pause');
+    document.body.classList.toggle('split-v', splitOn && splitMode === 'v');
+    document.body.classList.toggle('split-h', splitOn && splitMode === 'h');
+    renderer.setSplit(splitOn, splitMode);
+
+    // title row shows pad presence (poll runs in every mode for this).
+    // Live, every frame: a second pad registers as soon as it is pressed,
+    // so the PLAYERS row enables 2P without a reload.
+    if (game.state === 'title') {
+      const pads = Gamepad.padCount();
+      ui.setPadStatus(pads);
+      ui.setPlayers(twoPlayer ? 2 : 1, pads > 0, pads);
+    }
     if (game.state === 'play' && game.player) {
       if (game.mode === 'survival') {
         ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur,
           game.player.hp, game.player.maxHp);
+      } else if (game.mode === 'crates') {
+        ui.hudCrates(game.timeF / 60, game.cratesLeft);
       } else {
         ui.hud(game.coins, game.course.coinTotal, game.timeF / 60,
-          placement(game), game.player.hp, game.player.maxHp, game.timeLimit);
+          game.runs[0] ? game.aiPlace(game.runs[0]) : 1,
+          game.player.hp, game.player.maxHp, game.timeLimit);
       }
+      if (twoPlayer && game.players[1]) hud2Update();
     }
     if (game.state === 'clear') {
       ui.show('clear');
@@ -291,17 +519,35 @@ async function boot() {
       // always offers "next island"
       ui.clearStats(game.clearTime, game.coins, game.course.coinTotal,
         true, game.clearPlace);
+      ui.dual('clear', twoPlayer && game.clearPlaces
+        ? `${t('p1')} ${game.clearPlaces[0]} · ${t('p2')} ${game.clearPlaces[1]}`
+        : '');
     }
     if (game.state === 'dq') ui.show('dq');
     if (game.state === 'lost') {
       ui.show('lost');
       ui.lost(game.clearPlace, LEVELS[game.levelIndex].passPlace);
+      ui.dual('lost', twoPlayer && game.clearPlaces
+        ? `${t('p1')} ${game.clearPlaces[0]} · ${t('p2')} ${game.clearPlaces[1]}`
+        : '');
     }
     if (game.state === 'over' || game.state === 'win') {
-      if (!survSaved) { survSaved = true; saveSurvBest(game.survTime); }
+      // the arena keeps a best time; the cove only keeps bragging rights
+      if (game.mode === 'survival' && !survSaved) {
+        survSaved = true; saveSurvBest(game.survTime);
+      }
     }
-    if (game.state === 'over') { ui.show('over'); ui.overStats(game.survTime, survBest); }
-    if (game.state === 'win') { ui.show('win'); ui.winStats(survBest, game.allRacesCleared()); }
+    if (game.state === 'over') {
+      ui.show('over');
+      ui.overStats(game.survTime, game.mode === 'survival' ? survBest : 0);
+      ui.dual('over', twoPlayer ? dualState() : '');
+    }
+    if (game.state === 'win') {
+      ui.show('win');
+      if (game.mode === 'crates') ui.winCrates();
+      else ui.winStats(survBest, game.allRacesCleared());
+      ui.dual('win', twoPlayer ? dualState() : '');
+    }
 
     renderer.sync(game, game.state);
     renderer.render();
@@ -317,6 +563,8 @@ async function boot() {
   ui.show('title');
   ui.setHero(0);
   ui.setInputMode(inputMode);
+  ui.setPlayers(twoPlayer ? 2 : 1, canTwo(), Gamepad.padCount());
+  ui.setSplit(splitMode);
   ui.setPadStatus(false);
   requestAnimationFrame(frame);
 

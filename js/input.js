@@ -14,6 +14,7 @@ const BLOCK_DEFAULT = new Set([
 if (typeof addEventListener === 'function') {
   addEventListener('keydown', (e) => {
     if (BLOCK_DEFAULT.has(e.code)) e.preventDefault();
+    if (e.repeat) return;              // OS auto-repeat is NOT a press
     if (!held.has(e.code)) pressedSet.add(e.code);
     held.add(e.code);
   });

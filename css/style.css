@@ -237,3 +237,36 @@ html, body {
 @media (orientation: portrait) and (pointer: coarse) {
   #rotate:not(.hidden) { display: block; }
 }
+
+/* ---- two-player split screen ------------------------------------- */
+.hud2 { display: block; }
+.hud2.hidden { display: none; }
+.hud2 .hud-box { font-size: 13px; padding: 6px 12px; }
+body.split-v .hud2 #hud2-a { left: calc(50% + 14px); color: var(--gold); }
+body.split-v .hud2 #hud2-time { right: calc(14px + env(safe-area-inset-right)); }
+body.split-v .hud2 #hud2-b {
+  left: calc(50% + 14px); top: auto;
+  bottom: calc(14px + env(safe-area-inset-bottom)); color: #ff5a5f;
+}
+body.split-h .hud2 #hud2-a {
+  left: calc(14px + env(safe-area-inset-left));
+  top: calc(50% + 14px); color: var(--gold);
+}
+body.split-h .hud2 #hud2-time {
+  right: calc(14px + env(safe-area-inset-right));
+  top: calc(50% + 14px);
+}
+body.split-h .hud2 #hud2-b {
+  left: calc(14px + env(safe-area-inset-left)); top: auto;
+  bottom: calc(14px + env(safe-area-inset-bottom)); color: #ff5a5f;
+}
+body.split-v::after, body.split-h::after {
+  content: ''; position: fixed; background: rgba(0, 0, 0, 0.6);
+  z-index: 6; pointer-events: none;
+}
+body.split-v::after {
+  left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-1px);
+}
+body.split-h::after {
+  top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-1px);
+}

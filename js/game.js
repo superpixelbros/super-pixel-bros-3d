@@ -11,8 +11,11 @@
 
 import { createWorld } from './phys.js';
 import { Player, HERO_IDS, CHARACTERS } from './hero.js';
-import { LEVELS, courseStep, hazardTouch, windAt, arenaStep, ARENA } from './levels.js';
-import { makeRivals, placement } from './rivals.js';
+import {
+  LEVELS, courseStep, hazardTouch, windAt, arenaStep, ARENA,
+  crateStep, CRATES, MAP_SPACING,
+} from './levels.js';
+import { makeRivals } from './rivals.js';
 
 export default class Game {
   constructor(RAPIER) {
@@ -28,10 +31,19 @@ export default class Game {
     this.sfx = () => {};                 // main.js injects the audio hook
     this.hazardsOff = false;             // geometry-only bots (headless)
     this.gatesOff = false;               // race-rule gates off for bots
-    this.mode = 'race';                  // 'race' | 'survival' (per level)
+    this.mode = 'race';                  // 'race' | 'survival' | 'crates'
     this.rivals = [];
     this.wave = 1;                       // survival wave (HUD)
+    // two-player: up to two local runners share the stage. `player` is
+    // always P1; `players` holds both; `runs` carries per-player progress
+    // (coins, deaths, checkpoint, finish) so nothing leaks between them.
+    this.twoPlayer = false;
+    this.hero2Index = 1;
+    this.players = [];
+    this.runs = [];
   }
+
+  selectedHero2() { return HERO_IDS[this.hero2Index]; }
 
   selectedHero() { return HERO_IDS[this.heroIndex]; }
 
@@ -83,10 +95,13 @@ export default class Game {
   // next node (the arena included), no early trophy. The victory screen
   // lives behind claimVictory() on the arena's win card.
   advanceFrontier() {
-    const to = this.levelIndex + 1;
+    const to = Math.min(this.levelIndex + 1, LEVELS.length - 1);
     this.map.walk = { from: this.levelIndex, to, t: 0 };
     this.frontier = Math.max(this.frontier, to);
-    this.map.cursor = this.frontier;
+    // land on the NEXT node — not on the frontier. A saved frontier from
+    // an older ladder must never hop the hero past the stage they just
+    // unlocked (clearing stage 1 walks to stage 2, full stop).
+    this.map.cursor = to;
     this.state = 'map';
     return 'map';
   }
@@ -107,104 +122,194 @@ export default class Game {
     if (this.map.walk.t >= 1) this.map.walk = null;
   }
 
-  // node position for the diorama: node i at x = i * 6, walking eased
+  // node position for the diorama: node i at x = i * MAP_SPACING, walking eased
   mapHeroPos() {
     const w = this.map.walk;
-    if (!w) return { x: this.map.cursor * 6, walking: false };
+    if (!w) return { x: this.map.cursor * MAP_SPACING, walking: false };
     const e = w.t < 0.5 ? 2 * w.t * w.t : 1 - (1 - w.t) ** 2 * 2; // easeInOut
     return {
-      x: (w.from + (w.to - w.from) * e) * 6,
+      x: (w.from + (w.to - w.from) * e) * MAP_SPACING,
       walking: w.t < 1,
     };
   }
 
   // ---- one run -----------------------------------------------------------
   // (re)builds a fresh world; the renderer rebuilds meshes right after
-  start(levelIndex = this.levelIndex) {
+  start(levelIndex = this.levelIndex, opts = {}) {
     this.disposeWorld();
+    if (opts.twoPlayer != null) this.twoPlayer = !!opts.twoPlayer;
+    if (opts.hero2Index != null) this.hero2Index = opts.hero2Index;
     this.levelIndex = levelIndex;
     const def = LEVELS[levelIndex];
     this.mode = def.mode || 'race';
     this.world = createWorld(this.R);
     this.course = def.build(this.R, this.world);
-    this.player = new Player(this.R, this.world, this.selectedHero(),
-      this.course.spawn);
-    // survival = free control: no auto-run, WASD in two axes, hits shove
-    // AND bite — a flat 4-heart pool for every hero keeps the leaderboard
-    // honest (identity lives in grip, not in hit points, in here)
-    this.player.free = this.mode === 'survival';
-    if (this.mode === 'survival') {
-      this.player.maxHp = ARENA.hearts;
-      this.player.hp = ARENA.hearts;
+
+    // spawns: crates uses its dry-deck pads; races put P2 on P1's shoulder
+    const pads = this.course.spawnPads;
+    const spawn1 = pads ? { x: pads[0][0], y: 1.6, z: pads[0][1] }
+      : { ...this.course.spawn };
+    const spawn2 = pads ? { x: pads[1][0], y: 1.6, z: pads[1][1] }
+      : { x: this.course.spawn.x + 0.9, y: this.course.spawn.y,
+          z: this.course.spawn.z };
+
+    this.player = new Player(this.R, this.world, this.selectedHero(), spawn1);
+    this.players = [this.player];
+    if (this.twoPlayer) {
+      this.players.push(new Player(this.R, this.world, this.selectedHero2(),
+        spawn2));
     }
+    // survival & crates = free control: no auto-run, WASD in two axes.
+    // Survival hits bite (a flat heart pool keeps the leaderboard honest);
+    // crates don't do hearts at all — the SEA is the only judge.
+    for (const P of this.players) {
+      P.free = this.mode !== 'race';
+      if (P.free) P.autoRun = false;
+      if (this.mode === 'survival') {
+        P.maxHp = ARENA.hearts;
+        P.hp = ARENA.hearts;
+      } else if (this.mode === 'crates') {
+        P.maxHp = 99;                   // splash = out, hearts don't apply
+        P.hp = 99;
+      }
+    }
+    // crates races AGAINST the rivals (last one dry wins); survival is a
+    // solo pub challenge. Rivals take the pads after every human player.
     this.rivals = this.mode === 'survival' ? []
       : makeRivals(this.R, this.world, this.course,
-        CHARACTERS[this.selectedHero()]);
+        CHARACTERS[this.selectedHero()], this.course.spawnPads,
+        this.players.length);
+    if (this.mode === 'crates') {
+      for (const r of this.rivals) { r.player.free = true; r.player.autoRun = false; }
+    }
+    // per-player progress: nothing is shared between P1 and P2
+    this.runs = this.players.map((P) => ({
+      P, coins: 0, deaths: 0, finished: false, clearTime: 0, aiPlace: 1,
+      out: false, survived: false, bestSpawn: { ...P.spawn },
+    }));
     this.frame = 0;
     this.timeF = 0;
-    this.coins = 0;
+    this.coins = 0;                      // P1 mirrors (HUD / headless)
     this.deaths = 0;
     this.timeLimit = def.timeLimit || 0;
     this.tickAt = 0;
     this.bestSpawn = { ...this.course.spawn };
     this.wave = 1;
+    this.cratesLeft = this.course.crates ? this.course.crates.length : 0;
     this.ringR = this.course.ringR;
     this.state = 'play';
   }
 
+  // placement against the AI FIELD only (1..4). The other human is a team
+  // mate for gate purposes: on a must-win stage P1 1st + P2 2nd both pass.
+  aiPlace(run) {
+    const z = run.P.pos.z;
+    let ahead = 0;
+    for (const r of this.rivals) {
+      if (r.finished || r.player.pos.z > z) ahead++;
+    }
+    return ahead + 1;
+  }
+
   step(flags) {
     if (this.state !== 'play' || !this.player) return;
-    const P = this.player;
     this.frame++;
     this.timeF++;
-    if (this.mode === 'survival') { this.stepSurvival(flags); return; }
-    courseStep(this.R, this.course, this.frame, this.hazardsOff ? null : P);
+    const fl = Array.isArray(flags) ? flags : [flags];
+    if (this.mode === 'survival') { this.stepSurvival(fl); return; }
+    if (this.mode === 'crates') { this.stepCrates(fl); return; }
+    courseStep(this.R, this.course, this.frame,
+      this.hazardsOff ? null : this.player);
     // drop given-way crumble slabs out of the physics world (safe between
     // steps; the mesh keeps falling visually via fallT)
     for (const c of this.course.crumbles) {
       if (c.gone && !c.removed) { c.removed = true; this.world.removeRigidBody(c.body); }
     }
 
-    if (!this.hazardsOff) flags = { ...flags, windX: windAt(this.course, P.pos) };
-    if (flags.spin) this.sfx('spin');
-    P.step(flags);
-    if (P.jumped) this.sfx('jump');
-    if (P.landed) this.sfx('land');
+    // physics for every human runner (finished runners idle at the flag)
+    this.runs.forEach((run, i) => {
+      const f = fl[i] || fl[0];
+      if (run.finished) {
+        run.P.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+        return;
+      }
+      const ff = this.hazardsOff ? f
+        : { ...f, windX: windAt(this.course, run.P.pos) };
+      if (ff.spin && i === 0) this.sfx('spin');
+      run.P.step(ff);
+      if (i === 0 && run.P.jumped) this.sfx('jump');
+      if (i === 0 && run.P.landed) this.sfx('land');
+    });
     for (const r of this.rivals) {
       r.step(this.course, this.frame, this.timeF / 60, !this.hazardsOff);
     }
     this.world.step();
 
-    const p = P.pos;
-    if (!this.hazardsOff) {
-      // bounce pads launch on contact (before damage so you don't eat a hit
-      // the same frame you got a lift)
-      for (const b of this.course.bounces) {
-        if (P.vy <= 0.1 && p.y < 1.5 &&
-          Math.hypot(p.x - b.x, p.z - b.z) < b.r) {
-          P.bounce(b.up); this.sfx('bounce');
+    // per-runner rules: bounces, hazards, coins, checkpoints, falls, flag
+    for (const run of this.runs) {
+      if (run.finished) continue;
+      const P = run.P;
+      const p = P.pos;
+      const first = run === this.runs[0];
+      if (!this.hazardsOff) {
+        // bounce pads launch on contact (before damage so you don't eat a
+        // hit the same frame you got a lift)
+        for (const b of this.course.bounces) {
+          if (P.vy <= 0.1 && p.y < 1.5 &&
+            Math.hypot(p.x - b.x, p.z - b.z) < b.r) {
+            P.bounce(b.up);
+            if (first) this.sfx('bounce');
+          }
+        }
+        // damaging hazards → hearts + knockback; a lethal hit respawns
+        const k = hazardTouch(this.course, p);
+        if (k) {
+          const res = P.hurt(k.kx, k.kz);
+          if (res === 'hit') { if (first) this.sfx('hit'); }
+          else if (res === 'dead') {
+            if (first) this.sfx('die');
+            P.respawn(); run.deaths++;
+            if (first) this.deaths = run.deaths;
+          }
         }
       }
-      // damaging hazards → hearts + knockback; a lethal hit respawns
-      const k = hazardTouch(this.course, p);
-      if (k) {
-        const res = P.hurt(k.kx, k.kz);
-        if (res === 'hit') this.sfx('hit');
-        else if (res === 'dead') { this.sfx('die'); P.respawn(); this.deaths++; }
+      // coins are personal
+      for (const c of this.course.coins) {
+        if (c.taken) continue;
+        const dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+        if (dx * dx + dy * dy + dz * dz < 1.1) {
+          c.taken = true; run.coins++;
+          if (first) { this.coins = run.coins; this.sfx('coin'); }
+        }
+      }
+      // checkpoints are personal
+      for (const cp of this.course.checkpoints) {
+        if (p.z > cp.z && (run.bestSpawn.z ?? -999) < cp.z) {
+          run.bestSpawn = { x: cp.x, y: cp.y, z: cp.z };
+          P.spawn = run.bestSpawn;
+          if (first) { this.bestSpawn = run.bestSpawn; this.sfx('checkpoint'); }
+        }
+      }
+      // fell off the world
+      if (p.y < -12) {
+        run.deaths++;
+        if (first) { this.deaths = run.deaths; this.sfx('fall'); }
+        P.respawn();
+      }
+      // flag
+      if (p.z >= this.course.finishZ) {
+        run.finished = true;
+        run.clearTime = this.timeF / 60;
+        run.aiPlace = this.aiPlace(run);
+        P.autoRun = false;
+        if (first) this.sfx('clear');
       }
     }
-    // coins: simple proximity to the capsule center
-    for (const c of this.course.coins) {
-      if (c.taken) continue;
-      const dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
-      if (dx * dx + dy * dy + dz * dz < 1.1) {
-        c.taken = true; this.coins++; this.sfx('coin');
-      }
-    }
-    // speed pickups: boost rings and jinx orbs catch EVERY runner — hero
-    // and rivals share the same luck (bot reachability runs set pickupsOff)
+    // speed pickups: boost rings and jinx orbs catch EVERY runner — both
+    // players and rivals share the same luck (`pickupsOff` for bots)
     if (!this.pickupsOff) {
-      const runners = [P];
+      const runners = [];
+      for (const run of this.runs) if (!run.finished) runners.push(run.P);
       for (const r of this.rivals) runners.push(r.player);
       for (const kind of [1, -1]) {
         const arr = kind > 0 ? this.course.boosts : this.course.curses;
@@ -217,35 +322,21 @@ export default class Game {
             if (dx * dx + dy * dy + dz * dz < 1.5) {
               u.taken = true;
               q.applyMod(kind);
-              if (q === P) this.sfx(kind > 0 ? 'boost' : 'jinx');
+              if (q === this.player) this.sfx(kind > 0 ? 'boost' : 'jinx');
               break;
             }
           }
         }
       }
     }
-    // checkpoints
-    for (const cp of this.course.checkpoints) {
-      if (p.z > cp.z && (this.bestSpawn.z ?? -999) < cp.z) {
-        this.bestSpawn = { x: cp.x, y: cp.y, z: cp.z };
-        this.player.spawn = this.bestSpawn;
-        this.sfx('checkpoint');
-      }
-    }
-    // fell off the world
-    if (p.y < -12) {
-      this.deaths++;
-      this.sfx('fall');
-      this.player.respawn();
-    }
-    // flag wins before the clock
-    if (p.z >= this.course.finishZ) {
-      this.clearTime = this.timeF / 60;
-      this.clearPlace = placement(this);
-      // each stage allows a worst place (Shore: top 3 of 4, Ridge: must
-      // win) — finishing worse than that ends the run, not just the stage
-      if (!this.gatesOff &&
-        this.clearPlace > LEVELS[this.levelIndex].passPlace) {
+    // every runner across the flag → the stage verdict (both must clear)
+    if (this.runs.every((r) => r.finished)) {
+      this.clearTime = this.runs[0].clearTime;
+      this.clearPlace = this.runs[0].aiPlace;
+      this.clearTimes = this.runs.map((r) => r.clearTime);
+      this.clearPlaces = this.runs.map((r) => r.aiPlace);
+      const worst = Math.max(...this.runs.map((r) => r.aiPlace));
+      if (!this.gatesOff && worst > LEVELS[this.levelIndex].passPlace) {
         this.state = 'lost';
         this.sfx('gameover');
         return;
@@ -270,42 +361,111 @@ export default class Game {
   // costs a heart on top of the knockback. Out of the ring = over; hearts
   // at zero = over; ARENA.dur (60s) alive = win.
   stepSurvival(flags) {
-    const P = this.player;
+    const fl = Array.isArray(flags) ? flags : [flags];
     const t = this.timeF / 60;
     arenaStep(this.course, this.frame);
     if (this.course.wave > this.wave) { this.wave = this.course.wave; this.sfx('wave'); }
     this.ringR = ARENA.ringR(t);
     this.course.ringR = this.ringR;
-    if (flags.spin) this.sfx('spin');
-    P.step(flags);
+    this.runs.forEach((run, i) => {
+      const f = fl[i] || fl[0];
+      if (run.out) return;
+      if (f.spin && i === 0) this.sfx('spin');
+      run.P.step(f);
+    });
     this.world.step();
 
-    const p = P.pos;
-    // hits bite now: knockback toward the water AND a heart off the pool.
+    // hits bite: knockback toward the water AND a heart off the pool.
     // hurt() carries the 1.2s mercy window, so no chip-damage spirals.
-    const k = this.hazardsOff ? null : hazardTouch(this.course, p);
-    if (k) {
-      const res = P.hurt(k.kx * 1.4, k.kz * 1.4, 4.6);
-      if (res === 'hit') this.sfx('hit');
-      else if (res === 'dead') {
-        this.survTime = t;
-        this.sfx('die'); this.sfx('gameover');
-        this.state = 'over';
-        return;
+    // Co-op in 2P: a player who falls out stays out; the stage can only
+    // clear if BOTH are still standing at the buzzer.
+    for (const run of this.runs) {
+      if (run.out) continue;
+      const P = run.P;
+      const p = P.pos;
+      const first = run === this.runs[0];
+      const k = this.hazardsOff ? null : hazardTouch(this.course, p);
+      if (k) {
+        const res = P.hurt(k.kx * 1.4, k.kz * 1.4, 4.6);
+        if (res === 'hit') { if (first) this.sfx('hit'); }
+        else if (res === 'dead') {
+          run.out = true;
+          P.body.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
+          if (first) { this.sfx('die'); this.sfx('gameover'); }
+        }
+      }
+      if (!run.out && (Math.hypot(p.x, p.z) > this.ringR - 0.1 || p.y < -4)) {
+        run.out = true;
+        P.body.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
+        if (first) { this.sfx('fall'); this.sfx('gameover'); }
       }
     }
-    // the ring is the whole game: past it, the sea takes you
-    if (Math.hypot(p.x, p.z) > this.ringR - 0.1 || p.y < -4) {
+    const alive = this.runs.filter((r) => !r.out).length;
+    if (alive === 0) {
       this.survTime = t;
-      this.sfx('fall'); this.sfx('gameover');
       this.state = 'over';
       return;
     }
     // the final buzzer: outlast the whole closing ring → the win card
     if (t >= ARENA.dur) {
       this.survTime = ARENA.dur;
-      this.sfx('clear');
-      this.state = 'win';
+      if (alive === this.runs.length) {
+        this.sfx('clear');
+        this.state = 'win';
+      } else {
+        this.state = 'over';
+      }
+    }
+  }
+
+  // ---- Crate Cove (mode 'crates') — last one dry wins -------------------
+  // The decks sink on the shuffled schedule; four runners hop between them.
+  // You're OUT the instant you touch the water; the last deck shrinks to a
+  // sumo ring until only one runner is still dry. No clock, no buzzer.
+  stepCrates(flags) {
+    const fl = Array.isArray(flags) ? flags : [flags];
+    const t = this.timeF / 60;
+    crateStep(this.course, this.frame);
+    this.runs.forEach((run, i) => {
+      const f = fl[i] || fl[0];
+      if (run.out) return;               // out = parked, no more input
+      if (f.spin && i === 0) this.sfx('spin');
+      run.P.step({ ...f, z: f.z || 0 });
+    });
+    for (const r of this.rivals) r.stepCrates(this.course, this.frame);
+    this.world.step();
+    this.cratesLeft = this.course.crates.filter((k) => !k.sunk).length;
+
+    // the sea takes anyone who touches it — each player separately
+    for (const run of this.runs) {
+      if (run.out) continue;
+      const p = run.P.pos;
+      if (p.y < CRATES.drown) {
+        run.out = true;
+        run.P.body.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
+        if (run === this.runs[0]) this.sfx('fall');
+      }
+    }
+    const dryRuns = this.runs.filter((r) => !r.out);
+    if (dryRuns.length === 0) {         // everyone swimming
+      this.survTime = t;
+      this.sfx('gameover');
+      this.state = 'over';
+      return;
+    }
+    // every AI rival wet: any player still dry OUTLASTED the field = clear.
+    // In 2P a player who fell earlier fails the "both must clear" rule, so
+    // the stage ends on the failure card (the survivor's result still shows).
+    if (this.rivals.every((r) => r.out)) {
+      for (const run of dryRuns) run.survived = true;
+      this.survTime = t;
+      if (dryRuns.length === this.runs.length) {
+        this.sfx('clear');
+        this.state = 'win';
+      } else {
+        this.sfx('gameover');
+        this.state = 'over';
+      }
     }
   }
 

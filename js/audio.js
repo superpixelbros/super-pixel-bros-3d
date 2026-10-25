@@ -33,6 +33,22 @@ const THEMES = [
           ['G4',1],['A4',1],['B4',2],[null,2]],
     bass: ['A2','E2'],
   },
+  { // 2 - Crate Cove: a jaunty sea-shanty lilt, deck-to-deck energy
+    tempo: 2.35,
+    mel: [['D5',1],['F#5',1],['A5',2],['F#5',1],['E5',1],['D5',2],[null,1],
+          ['B4',1],['D5',1],['E5',2],['F#5',1],['E5',1],['D5',2],
+          ['A4',1],['B4',1],['D5',2],['E5',1],[null,1],
+          ['F#5',1],['E5',1],['D5',2],[null,2]],
+    bass: ['D2','A2'],
+  },
+  { // 3 - Bumper Arena: driving, tense, fast — a fight in a phone box
+    tempo: 3.1,
+    mel: [['A4',1],['C5',1],['E5',1],['C5',1],['A4',2],[null,1],
+          ['G4',1],['B4',1],['D5',1],['B4',1],['G4',2],
+          ['E5',1],['D5',1],['C5',1],['B4',1],['A4',2],[null,1],
+          ['C5',1],['B4',1],['A4',2],[null,2]],
+    bass: ['A1','E2'],
+  },
 ];
 
 class AudioEngine {

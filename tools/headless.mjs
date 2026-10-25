@@ -9,13 +9,16 @@ import { dirname, join } from 'node:path';
 
 import { TABLES, t } from '../js/i18n.js';
 import Input from '../js/input.js';
-import { initPhysics } from '../js/phys.js';
+import * as Gamepad from '../js/gamepad.js';
+import { initPhysics, createWorld } from '../js/phys.js';
 import Game from '../js/game.js';
 import {
   LEVELS, hazardTouch, windAt, courseStep, makeHammer, makePendulum,
   makeRoller, makePiston, makeCrumble, makeBounce, makeWind, ARENA,
+  CRATES, buildCrates, crateStep,
 } from '../js/levels.js';
-import { Player, HERO_IDS, CHARACTERS } from '../js/hero.js';
+import { Player, HERO_IDS, CHARACTERS, stepHeroGrid } from '../js/hero.js';
+import { crateHop } from '../js/rivals.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const jsDir = join(here, '..', 'js');
@@ -58,6 +61,99 @@ Input.press('KeyW'); Input.endFrame();
 ok(Input.isDown('KeyW') && !Input.pressed('KeyW'), 'press holds across frames');
 Input.release('KeyW'); Input.endFrame();
 ok(!Input.isDown('KeyW'), 'release clears held');
+
+// ---- 2b) gamepad detection (two pads, array-like list) --------------------
+console.log('gamepad');
+{
+  const mkPad = (index, pressed = {}) => ({
+    index, connected: true, id: `F710 #${index}`,
+    buttons: Array.from({ length: 17 }, (_, i) => ({
+      pressed: !!pressed[i], value: pressed[i] ? 1 : 0,
+    })),
+    axes: [0, 0, 0, 0],
+  });
+  // ARRAY-LIKE, not iterable: browsers hand back GamepadList objects, so
+  // detection must never assume Symbol.iterator (the old for...of bug)
+  const list = { length: 2, 0: mkPad(0, { 0: true }), 1: mkPad(1, {}) };
+  Gamepad.init(() => list);
+  Gamepad.setEnabled(true);
+  ok(Gamepad.padCount() === 2,
+    'two pads detected from an array-like gamepad list');
+  let slots = Gamepad.pollSlots();
+  ok(slots.length === 2 && slots[0].connected && slots[1].connected,
+    'pollSlots: both pads map to their own slot');
+  ok(slots[0].jump && !slots[1].jump,
+    'pollSlots: each slot reads its own ✕ press');
+
+  // slot 0 is always the LOWEST-INDEX pad, whatever the list order
+  const list2 = { length: 2, 0: mkPad(3, { 0: true }), 1: mkPad(0, {}) };
+  Gamepad.init(() => list2);
+  slots = Gamepad.pollSlots();
+  ok(slots[0].index === 0 && slots[1].index === 3,
+    'pollSlots: slots sort by pad index');
+
+  // a second pad pressing Start reaches Input (pause works from pad 2).
+  // The FIRST poll of a newly seen pad is swallowed (wake-press guard), so
+  // register both pads before asserting.
+  Gamepad.poll();
+  Input.endFrame();
+  list2[1].buttons[9].pressed = true;
+  list2[1].buttons[9].value = 1;
+  Gamepad.poll();
+  ok(Input.pressed('Escape') && Input.pressed('KeyQ'),
+    'menu codes (Start) come from ANY pad, not just the first');
+  Gamepad.setEnabled(false);
+  Input.endFrame();
+
+  // plugging pad 3 with ✕ held must NOT start/confirm anything
+  Input.endFrame();
+  const list3 = { length: 1, 0: mkPad(7, { 0: true }) };
+  Gamepad.init(() => list3);
+  Gamepad.setEnabled(true);
+  Gamepad.poll();
+  ok(!Input.pressed('Enter') && !Input.pressed('Space'),
+    'the wake press never starts the game or confirms a menu');
+  Gamepad.setEnabled(false);
+  Input.endFrame();
+
+  // unplug the second pad: slot 1 empties, slot 0 keeps working
+  list[1].connected = false;
+  Gamepad.init(() => list);
+  Gamepad.setEnabled(true);
+  slots = Gamepad.pollSlots();
+  ok(slots[0].connected && !slots[1].connected,
+    'unplugging pad 2 empties slot 1 only');
+
+  // DISABLED slots must still be fully shaped: a missing x/jump field turns
+  // into NaN inside Player.step and freezes that player for the whole run
+  Gamepad.setEnabled(false);
+  const dead = Gamepad.pollSlots();
+  ok(dead.length === 2 && dead.every((s) => !s.connected
+    && typeof s.x === 'number' && typeof s.z === 'number'
+    && typeof s.jump === 'boolean' && typeof s.jumpPressed === 'boolean'),
+    'disabled slots are fully shaped (no undefined → NaN flags)');
+
+  Gamepad.setEnabled(false);
+  Gamepad.init(() => []);
+  ok(Gamepad.padCount() === 0, 'no pads → count 0');
+}
+
+// ---- 2c) select grid navigation (up/down stay in bounds) -----------------
+console.log('select grid');
+{
+  const L = HERO_IDS.length;             // 10 heroes
+  ok(stepHeroGrid(0, 0, 1, 4, L) === 4, 'grid: down = exactly one row');
+  ok(stepHeroGrid(2, 0, 1, 4, L) === 6, 'grid: down keeps the column');
+  ok(stepHeroGrid(6, 0, -1, 4, L) === 2, 'grid: up = exactly one row');
+  ok(stepHeroGrid(1, 0, -1, 4, L) === 1,
+    'grid: up from the first row stays in bounds');
+  ok(stepHeroGrid(L - 1, 0, 1, 4, L) === L - 1,
+    'grid: down from the short last row never jumps columns');
+  ok(stepHeroGrid(L - 1, 1, 0, 4, L) === 0, 'grid: right wraps from the last card');
+  ok(stepHeroGrid(0, -1, 0, 4, L) === L - 1, 'grid: left wraps from the first card');
+  ok(stepHeroGrid(8, 0, 1, 3, L) === 8,
+    'grid: obeys a 3-column layout too (no out-of-bounds hop)');
+}
 
 // ---- 3) Game: full run under real physics ---------------------------------
 console.log('game');
@@ -108,7 +204,7 @@ ok(g.coins > 0, `coin collected (${g.coins})`);
 const g2 = mkGame('yas');
 g2.player.body.setTranslation({ x: 0, y: 1.2, z: 30 }, true);
 for (let i = 0; i < 3; i++) g2.step({ x: 0, jump: false, jumpHeld: false, spin: false });
-ok(g2.player.spawn.z >= 28, `checkpoint armed (spawn z=${g2.player.spawn.z})`);
+ok(g2.player.spawn.z >= 22, `checkpoint armed (spawn z=${g2.player.spawn.z})`);
 g2.player.body.setTranslation({ x: 0, y: -40, z: 30 }, true);
 g2.step({ x: 0, jump: false, jumpHeld: false, spin: false });
 ok(g2.player.pos.y > -5 && g2.deaths === 1, 'falling respawns at checkpoint');
@@ -128,7 +224,7 @@ ok(g3.state === 'clear' && g3.clearTime > 0, `finished → clear in ${g3.clearTi
 console.log('roster reachability');
 const levelTimes = LEVELS.map(() => []);
 for (let li = 0; li < LEVELS.length; li++) {
-  if ((LEVELS[li].mode || 'race') === 'survival') continue;   // own section
+  if ((LEVELS[li].mode || 'race') !== 'race') continue;   // arena + crates: own sections
   for (const id of HERO_IDS) {
     const h = mkGame(id, li);
     h.hazardsOff = true;   // geometry + pace probe: timed hazards are the
@@ -138,9 +234,12 @@ for (let li = 0; li < LEVELS.length; li++) {
     const zones = h.course.jumpZones;
     const narrows = h.course.narrows;
     let hold = 0;
-    for (let i = 0; i < 5400 && h.state === 'play'; i++) {
+    // cap 160s: Sunset Ridge v3 is ~2× long — slowest bots land ~90s
+    for (let i = 0; i < 9600 && h.state === 'play'; i++) {
       const q = h.player.pos;
-      const jump = h.player.grounded &&
+      // press EDGES only (hold === 0): the jump latch needs a release to
+      // re-arm, so a level-triggered bot would jump once and freeze
+      const jump = hold === 0 && h.player.grounded &&
         zones.some(([a, b]) => q.z > a && q.z < b);
       if (jump) hold = 32;
       // gated chicanes: inside a narrow, steer for the GAP center (a
@@ -249,25 +348,25 @@ console.log('power-ups');
   pg.disposeWorld();
 
   // the arena ships no pickups (it has a ring to keep you honest)
-  const ag = mkGame('hero', 2);
+  const ag = mkGame('hero', 3);
   ok(ag.course.boosts.length === 0 && ag.course.curses.length === 0,
     'bumper arena ships zero pickups');
   ag.disposeWorld();
 }
 
 // ---- 4) scenery is solid ---------------------------------------------------
-// palm trunk at (−6.4, z=2) on the shore shoulder: a hero pushed into it
-// must stop at the bark, not ghost through
+// palm trunk at (−6.6, z=6) on the Daybreak Ridge shoulder: a hero pushed
+// into it must stop at the bark, not ghost through
 console.log('scenery collisions');
 {
   const tg = mkGame('hero', 0);
   tg.player.autoRun = false;
-  tg.player.body.setTranslation({ x: -5.0, y: 1.2, z: 2 }, true);
+  tg.player.body.setTranslation({ x: -5.0, y: 1.2, z: 6 }, true);
   for (let i = 0; i < 90; i++) {
     tg.step({ x: -1, jump: false, jumpHeld: false, spin: false });
   }
   const tx = tg.player.pos.x;
-  ok(tx < -5.2 && tx > -5.82,
+  ok(tx < -5.6 && tx > -6.25,
     `hero stops at the palm trunk (x=${tx.toFixed(2)})`);
   tg.disposeWorld();
 }
@@ -306,15 +405,15 @@ console.log('damage + hazards');
     'hammer bar rotated away is safe');
 
   const wg = mkGame('hero', 0);
-  // integration: a real hero standing in the shore pendulum's path eats a
+  // integration: a real hero standing in the Ridge pendulum's path eats a
   // hit from the live game loop (geometry, not just unit math)
   wg.player.autoRun = false;
-  wg.player.body.setTranslation({ x: 0, y: 1.2, z: 24 }, true);
+  wg.player.body.setTranslation({ x: 0, y: 1.2, z: 90.8 }, true);
   for (let i = 1; i <= 220 && wg.player.hp === wg.player.maxHp; i++) {
     wg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
   }
   ok(wg.player.hp === wg.player.maxHp - 1,
-    'shore pendulum hits a hero in the live loop');
+    'ridge pendulum hits a hero in the live loop');
   ok(windAt({ winds: [{ z0: 10, z1: 20, dir: -1, force: 4 }] }, { z: 15 }) === -4,
     'wind pushes in its direction within its span');
   ok(windAt({ winds: [{ z0: 10, z1: 20, dir: 1, force: 4 }] }, { z: 30 }) === 0,
@@ -369,8 +468,9 @@ console.log('clock + disqualification');
 }
 
 // ---- 6b) placement gates ---------------------------------------------------
-// Shore advances on top-3 (4th loses); Ridge demands 1st. We park rivals at
-// chosen z's around the flag to force a finishing place and check the outcome.
+// Daybreak Ridge advances on top-3 (4th loses); Sunset Ridge demands 1st.
+// We park rivals at chosen z's around the flag to force a finishing place
+// and check the outcome.
 console.log('placement gates');
 {
   // finish with exactly `ahead` rivals beating us, hero otherwise clean
@@ -393,13 +493,13 @@ console.log('placement gates');
     }
     return gg;
   };
-  const g1 = gateRun(0, 3);   // shore, 3 rivals ahead → we are 4th
+  const g1 = gateRun(0, 3);   // dayridge, 3 rivals ahead → we are 4th
   ok(g1.state === 'lost' && g1.clearPlace === 4,
-    `shore 4th place → LOST (place=${g1.clearPlace})`);
+    `dayridge 4th place → LOST (place=${g1.clearPlace})`);
   g1.disposeWorld();
-  const g2 = gateRun(0, 2);   // shore, 2 ahead → 3rd → passes (top 3)
+  const g2 = gateRun(0, 2);   // dayridge, 2 ahead → 3rd → passes (top 3)
   ok(g2.state === 'clear' && g2.clearPlace === 3,
-    `shore 3rd place → clear (place=${g2.clearPlace})`);
+    `dayridge 3rd place → clear (place=${g2.clearPlace})`);
   g2.disposeWorld();
   const g3 = gateRun(1, 1);   // ridge, 1 ahead → 2nd → must-win means LOST
   ok(g3.state === 'lost' && g3.clearPlace === 2,
@@ -411,20 +511,49 @@ console.log('placement gates');
   g4.disposeWorld();
 }
 
+// ---- 6c) the difficulty wave: Sunset Ridge v3 is the double-length one --
+console.log('stage lengths');
+{
+  const a = mkGame('hero', 0);
+  const b = mkGame('hero', 1);
+  ok(b.course.finishZ >= 1.9 * a.course.finishZ,
+    `stage 2 (${b.course.finishZ}m) ≥ 1.9× stage 1 (${a.course.finishZ}m)`);
+  ok(b.course.crumbles.length >= 4 && b.course.gates.length === 3
+    && b.course.hammers.length >= 4 && b.course.pendulums.length >= 5,
+    `stage 2 carries the new gauntlet (crumbles=${b.course.crumbles.length}` +
+    ` gates=${b.course.gates.length} hammers=${b.course.hammers.length}` +
+    ` pendulums=${b.course.pendulums.length})`);
+  a.disposeWorld(); b.disposeWorld();
+}
+
 // ---- 7) AI rivals race along ----------------------------------------------
 // Rivals run the SAME course on autopilot: they must make real progress,
 // stay finite, finish, and yield a sane hero placement.
 console.log('rivals');
 {
   const rg = mkGame('hero', 0);
+  // rival autopilot probe — hazards parked so the race is about pace;
+  // the live-hazard rival torture lives in THE GAUNTLET STRESS below
+  rg.hazardsOff = true;
   let hold = 0;
   const zones = rg.course.jumpZones;
-  for (let i = 0; i < 3600 && rg.state === 'play'; i++) {
+  const narrows = rg.course.narrows;
+  for (let i = 0; i < 5400 && rg.state === 'play'; i++) {
     const q = rg.player.pos;
-    const jump = rg.player.grounded &&
+    // press EDGE only — the latch needs a release to re-arm
+    const jump = hold === 0 && rg.player.grounded &&
       zones.some(([a, b]) => q.z > a && q.z < b);
     if (jump) hold = 32;
-    rg.step({ x: 0, jump, jumpHeld: hold > 0, spin: false });
+    // Daybreak Ridge has real canyon walls — steer for the gap centers
+    // (same contract as the roster bot) or the hero grinds on stone
+    let steer = 0;
+    for (const [z0, z1, , cx = 0] of narrows) {
+      if (q.z > z0 - 1.5 && q.z < z1 && Math.abs(q.x - cx) > 0.5) {
+        steer = Math.sign(cx - q.x);
+        break;
+      }
+    }
+    rg.step({ x: steer, jump, jumpHeld: hold > 0, spin: false });
     if (hold > 0) hold--;
   }
   // hero stands at the flag; let the rivals run out their race on a clock
@@ -451,9 +580,9 @@ console.log('rivals');
   const rg2 = mkGame('hero', 1);
   const zones2 = rg2.course.jumpZones, narrows2 = rg2.course.narrows;
   let hold2 = 0;
-  for (let i = 0; i < 5400 && rg2.state === 'play'; i++) {
+  for (let i = 0; i < 9600 && rg2.state === 'play'; i++) {
     const q = rg2.player.pos;
-    const jump = rg2.player.grounded &&
+    const jump = hold2 === 0 && rg2.player.grounded &&
       zones2.some(([a, b]) => q.z > a && q.z < b);
     if (jump) hold2 = 32;
     let steer = 0;
@@ -466,7 +595,7 @@ console.log('rivals');
     rg2.step({ x: steer, jump, jumpHeld: hold2 > 0, spin: false });
     if (hold2 > 0) hold2--;
   }
-  for (let i = 1; i <= 60 * 40; i++) {
+  for (let i = 1; i <= 60 * 100; i++) {
     // keep the kinematics alive while the rivals run out their race —
     // the portcullis only lifts if courseStep keeps turning
     courseStep(R, rg2.course, rg2.timeF + i, null);
@@ -490,7 +619,7 @@ mg.enterMap();
 ok(mg.state === 'map' && mg.map.cursor === 0 && !mg.map.walk,
   'enterMap: fresh save sits at stage 1');
 mg.mapMove(1);
-ok(mg.map.cursor === 2,
+ok(mg.map.cursor === 3,
   'frontier 0: the arena challenge is always reachable (skips locked stages)');
 mg.mapMove(-1);
 ok(mg.map.cursor === 0, 'a locked stage is skimmed past, never parked on');
@@ -498,7 +627,7 @@ mg.frontier = 1;
 mg.mapMove(1);
 ok(mg.map.cursor === 1, 'cursor reaches the frontier stage');
 mg.mapMove(1);
-ok(mg.map.cursor === 2, 'the arena node sits beyond the last race stage');
+ok(mg.map.cursor === 3, 'the arena node sits beyond the last race stage');
 mg.mapMove(-1);
 mg.mapMove(-1);
 ok(mg.map.cursor === 0, 'cursor clamps at stage 1');
@@ -520,12 +649,25 @@ const hp1 = mg.mapHeroPos();
 ok(!hp1.walking && Math.abs(hp1.x - 6) < 0.01,
   `hero ends up on node 2 (x=${hp1.x.toFixed(1)})`);
 
+// regression (Oct 2026): a persisted frontier from an older ladder must
+// never hop the hero PAST the node they just unlocked
+mg.frontier = 3;
+mg.levelIndex = 0;
+mg.advanceFrontier();
+ok(mg.map.cursor === 1,
+  'a saved frontier never hops the hero past the next node (stage 1 → 2)');
+
 mg.levelIndex = 1;
+mg.frontier = 1;   // the cove is still unbeaten
 // an arena win with the ladder unfinished just walks you back to the map
 ok(mg.claimVictory() === 'map' && mg.state === 'map' && mg.frontier === 1,
   'arena win with stages uncleared only walks you back to the map');
 ok(mg.advanceFrontier() === 'map' && mg.frontier === 2 && mg.state === 'map',
-  'clearing the last race stage advances to the ARENA node (no early trophy)');
+  'clearing Sunset Ridge unlocks the CRATE COVE node');
+ok(!mg.allRacesCleared(), 'the ladder is not complete until the cove is won');
+mg.levelIndex = 2;
+ok(mg.advanceFrontier() === 'map' && mg.frontier === 3 && mg.map.cursor === 3,
+  'clearing Crate Cove walks to the ARENA node (no early trophy)');
 ok(mg.allRacesCleared(), 'race ladder complete');
 ok(mg.claimVictory() === 'victory' && mg.state === 'victory',
   'trophy = arena win + every race stage cleared');
@@ -537,7 +679,7 @@ console.log('survival arena');
   const live = (c) => [c.pendulums, c.rollers, c.hammers]
     .reduce((n, arr) => n + arr.filter((h) => h.active).length, 0);
 
-  const sg = mkGame('hero', 2);
+  const sg = mkGame('hero', 3);
   ok(sg.mode === 'survival' && sg.player.free && sg.rivals.length === 0,
     'arena: free control, no rivals, no auto-run');
   for (let i = 0; i < 90; i++) {
@@ -551,7 +693,7 @@ console.log('survival arena');
   sg.disposeWorld();
 
   // ring closes monotonically, waves only climb, hazard count escalates
-  const rg = mkGame('hero', 2);
+  const rg = mkGame('hero', 3);
   rg.hazardsOff = true;
   let mono = true, prevR = rg.ringR, prevW = 1, live0 = 0, live45 = 0, live55 = 0;
   for (let i = 0; i < 60 * 57 && rg.state === 'play'; i++) {
@@ -571,7 +713,7 @@ console.log('survival arena');
   rg.disposeWorld();
 
   // stand outside the closing ring → the sea takes you
-  const og = mkGame('hero', 2);
+  const og = mkGame('hero', 3);
   og.hazardsOff = true;
   og.player.body.setTranslation({ x: 0, y: 1.2, z: 9.85 }, true);
   for (let i = 0; i < 60 * 30 && og.state === 'play'; i++) {
@@ -582,7 +724,7 @@ console.log('survival arena');
   og.disposeWorld();
 
   // the heart pool: flat 4 for every hero; hits bite through it; zero = over
-  const hg = mkGame('hero', 2);
+  const hg = mkGame('hero', 3);
   ok(hg.player.maxHp === ARENA.hearts && hg.player.hp === ARENA.hearts,
     `arena ships a flat ${ARENA.hearts}-heart pool`);
   let bites = 0;
@@ -602,7 +744,7 @@ console.log('survival arena');
   hg.disposeWorld();
 
   // the full gauntlet: 60s alive → LAST STANDING
-  const wg = mkGame('ghzl', 2);
+  const wg = mkGame('ghzl', 3);
   wg.hazardsOff = true;
   for (let i = 0; i < 60 * 64 && wg.state === 'play'; i++) {
     wg.player.body.setTranslation({ x: 0, y: 1.2, z: 0 }, true);
@@ -611,6 +753,192 @@ console.log('survival arena');
   ok(wg.state === 'win' && wg.survTime >= ARENA.dur,
     `survive ${ARENA.dur} seconds → WIN (t=${(wg.timeF / 60).toFixed(1)}s)`);
   wg.disposeWorld();
+}
+
+// ---- 11) crate cove: strict last one standing ------------------------------
+console.log('crate cove');
+{
+  const cg = mkGame('hero', 2);
+  ok(cg.mode === 'crates' && cg.player.free && cg.rivals.length === 3
+    && cg.course.crates.length === 12 && !cg.player.autoRun,
+    'cove: free control, three rivals, twelve decks, no auto-run');
+  const finite = cg.course.crates.map((k) => k.sinkAt)
+    .filter((t) => t !== Infinity).sort((a, b) => a - b);
+  ok(finite.length === 11 && finite.every((t, i) => i === 0 || t > finite[i - 1]),
+    'eleven decks sink on an escalating schedule, one is the showdown');
+  cg.disposeWorld();
+
+  // same seed → same deal; different seed → different deal
+  const sched = (seed) => {
+    const w = createWorld(R);
+    const c = buildCrates(R, w, seed);
+    const out = c.crates.map((k) => k.sinkAt).join(',');
+    w.free();
+    return out;
+  };
+  ok(sched(1234) === sched(1234), 'a fixed seed deals the same sink order');
+  ok(sched(1234) !== sched(99), 'a different seed deals a different order');
+
+  // the hero plays with the same hop brain the rivals use — it must end
+  const hg = mkGame('hero', 2);
+  let hold = 0;
+  for (let i = 0; i < 60 * 160 && hg.state === 'play'; i++) {
+    const q = hg.player.pos;
+    const h = crateHop(hg.course, q, hg.player.grounded, hg.frame);
+    if (h.jump) hold = 26;
+    hg.step({ x: h.x, z: h.z, jump: h.jump, jumpHeld: hold > 0, spin: false });
+    if (hold > 0) hold--;
+  }
+  ok(hg.state === 'win' || hg.state === 'over',
+    `the cove always reaches a verdict (${hg.state} at ${(hg.frame / 60).toFixed(1)}s)`);
+  hg.disposeWorld();
+
+  // the sea is the only judge: touch it and you're out
+  const og = mkGame('hero', 2);
+  og.player.body.setTranslation({ x: 20, y: -2, z: 0 }, true);
+  for (let i = 0; i < 10 && og.state === 'play'; i++) {
+    og.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(og.state === 'over', 'touching the sea ends the run (over)');
+  og.disposeWorld();
+
+  // every rival swimming while you're dry = last one standing (no buzzer)
+  const wg = mkGame('hero', 2);
+  for (const r of wg.rivals) {
+    r.player.body.setTranslation({ x: 20, y: -2, z: 0 }, true);
+  }
+  for (let i = 0; i < 6 && wg.state === 'play'; i++) {
+    wg.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(wg.state === 'win' && wg.rivals.every((r) => r.out),
+    'last one dry wins — the rivals must go in');
+  wg.disposeWorld();
+
+  // the showdown deck shrinks into a sumo ring once it stands alone
+  const sg = mkGame('hero', 2);
+  for (const k of sg.course.crates) if (k.sinkAt !== Infinity) k.sinkAt = 0;
+  for (let f = 0; f < 60 * 6; f++) crateStep(sg.course, f);
+  const last = sg.course.crates.find((k) => k.sinkAt === Infinity);
+  ok(sg.course.showdownAt != null && last.half === CRATES.half,
+    'one deck left → the showdown arms (full size during the grace)');
+  for (let f = 60 * 6; f < 60 * 24; f++) crateStep(sg.course, f);
+  ok(last.half <= CRATES.shrinkTo + 1e-6,
+    `the last deck shrinks into a sumo ring (half=${last.half.toFixed(2)})`);
+  sg.disposeWorld();
+}
+
+// ---- 12) regressions from the Oct 2026 playtest ---------------------------
+console.log('regressions');
+{
+  // one press = one jump: holding never re-arms, release must happen
+  const jg = mkGame('hero', 0);
+  jg.player.autoRun = false;
+  let jumps = 0;
+  for (let i = 0; i < 400; i++) {
+    jg.step({ x: 0, jump: i === 0, jumpHeld: true, spin: false });
+    if (jg.player.jumped) jumps++;
+  }
+  ok(jumps === 1, `jump: one press = one jump, hold never re-arms (got ${jumps})`);
+  jg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  jg.step({ x: 0, jump: true, jumpHeld: true, spin: false });
+  ok(jg.player.jumped, 'jump: release + press re-arms the next jump');
+  jg.disposeWorld();
+
+  // hammer damage covers the visible bar only (no phantom zone)
+  const w = createWorld(R);
+  const hm = makeHammer(R, w, 0, 0, 0);    // bar along +X, stationary
+  const c = { hammers: [hm], pendulums: [], rollers: [], pistons: [] };
+  hm.harm = 0;
+  ok(!!hazardTouch(c, { x: 2.5, y: 0.7, z: 0 }),
+    'hammer: hero at bar height inside the sweep is hit');
+  ok(!hazardTouch(c, { x: 2.5, y: 2.0, z: 0 }),
+    'hammer: jumping above the bar is safe');
+  ok(!hazardTouch(c, { x: 5.7, y: 0.7, z: 0 }),
+    'hammer: no phantom hit past the bar tip');
+  w.free();
+}
+
+// ---- 13) two-player --------------------------------------------------------
+console.log('two player');
+{
+  const g = mkGame('hero', 0);
+  g.start(0, { twoPlayer: true, hero2Index: 2 });
+  ok(g.players.length === 2 && g.runs.length === 2 && g.rivals.length === 3,
+    'two-player: P1 + P2 + three rivals (5-runner field)');
+  ok(Math.abs(g.players[1].pos.x - g.players[0].pos.x) > 0.2,
+    'P2 spawns beside P1, not inside them');
+  ok(g.players[1].maxHp === g.players[1].hp && g.players[0].hp > 0,
+    'both players carry their own hearts');
+
+  // both bots clear Daybreak: same zone-edge jump contract for each slot
+  const zones = g.course.jumpZones, narrows = g.course.narrows;
+  const holds = [0, 0];
+  const bot = (i) => {
+    const run = g.runs[i];
+    const q = run.P.pos;
+    const jump = holds[i] === 0 && run.P.grounded &&
+      zones.some(([a, b]) => q.z > a && q.z < b);
+    if (jump) holds[i] = 32;
+    let steer = 0;
+    for (const [z0, z1, , cx = 0] of narrows) {
+      if (q.z > z0 - 1.5 && q.z < z1 && Math.abs(q.x - cx) > 0.5) {
+        steer = Math.sign(cx - q.x); break;
+      }
+    }
+    const f = { x: steer, jump, jumpHeld: holds[i] > 0, spin: false };
+    if (holds[i] > 0) holds[i]--;
+    return f;
+  };
+  for (let i = 0; i < 9600 && g.state === 'play'; i++) {
+    g.step([bot(0), bot(1)]);
+  }
+  ok(g.state === 'clear' && g.runs.every((r) => r.finished),
+    `two-player race clears with BOTH finishers (state=${g.state})`);
+  ok(g.clearPlaces.length === 2 && g.clearPlaces.every((p) => p >= 1 && p <= 4),
+    `dual places are AI-relative (${g.clearPlaces.join(' / ')})`);
+  ok(g.coins === g.runs[0].coins && g.runs[1].coins >= 0,
+    'coins stay personal per player');
+  g.disposeWorld();
+
+  // crates 2P: both dry when the AI field is gone = both clear
+  const cg = mkGame('hero', 2);
+  cg.start(2, { twoPlayer: true, hero2Index: 1 });
+  ok(cg.runs.length === 2 && cg.rivals.length === 3,
+    'crates 2P: two players, three rivals');
+  for (const r of cg.rivals) {
+    r.player.body.setTranslation({ x: 30, y: -2, z: 0 }, true);
+  }
+  const idle = { x: 0, z: 0, jump: false, jumpHeld: false, spin: false };
+  for (let i = 0; i < 8 && cg.state === 'play'; i++) cg.step([idle, idle]);
+  ok(cg.state === 'win' && cg.runs.every((r) => r.survived),
+    'crates 2P: both players dry = both clear the cove');
+  cg.disposeWorld();
+
+  // arena 2P is co-op: both must still be standing at the buzzer
+  const ag = mkGame('hero', 3);
+  ag.start(3, { twoPlayer: true, hero2Index: 1 });
+  ag.hazardsOff = true;
+  for (let i = 0; i < 60 * 64 && ag.state === 'play'; i++) {
+    for (const P of ag.players) {
+      P.body.setTranslation({ x: 0, y: 1.2, z: 0 }, true);
+    }
+    ag.step([idle, idle]);
+  }
+  ok(ag.state === 'win' && ag.runs.every((r) => !r.out),
+    'arena 2P co-op: both survive 60s → win');
+  ag.disposeWorld();
+
+  const fg = mkGame('hero', 3);
+  fg.start(3, { twoPlayer: true, hero2Index: 1 });
+  fg.hazardsOff = true;
+  fg.runs[1].out = true;                 // P2 went in — co-op can't clear
+  fg.players[1].body.setTranslation({ x: 0, y: -40, z: 0 }, true);
+  for (let i = 0; i < 60 * 64 && fg.state === 'play'; i++) {
+    fg.players[0].body.setTranslation({ x: 0, y: 1.2, z: 0 }, true);
+    fg.step([idle, idle]);
+  }
+  ok(fg.state === 'over', 'arena 2P: one splash ends the co-op run');
+  fg.disposeWorld();
 }
 
 // ---- done -----------------------------------------------------------------

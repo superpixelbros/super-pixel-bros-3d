@@ -14,33 +14,44 @@ import { STEP } from './phys.js';
 // across the roster ≤ 1.05 — nobody outruns anybody, so identity lives in
 // grip, ignition, jump arc and heart count instead.
 export const CHARACTERS = {
-  hero:  { speed: 7.2, accel: 44, friction: 58, jump: 11.2, hp: 2,
+  hero:  { speed: 7.2, accel: 44, friction: 58, jump: 10.5, hp: 2,
     color: 0x5560dd, style: 'cap' },    // indigo everyman — does the job
-  shararah: { speed: 7.45, accel: 64, friction: 50, jump: 10.4, hp: 1,
+  shararah: { speed: 7.45, accel: 64, friction: 50, jump: 9.8, hp: 1,
     steer: 1.15,                         // spark — best ignition, snappy cuts
     color: 0xf2683c, style: 'fletch' },
-  yas:   { speed: 7.3, accel: 48, friction: 56, jump: 11.0, hp: 2,
+  yas:   { speed: 7.3, accel: 48, friction: 56, jump: 10.3, hp: 2,
     color: 0x3fae5a, style: 'cap' },     // confident — nothing fazes him
-  ghzl:  { speed: 7.35, accel: 50, friction: 48, jump: 12.0, hp: 1,
+  ghzl:  { speed: 7.35, accel: 50, friction: 48, jump: 11.3, hp: 1,
     floaty: true,                        // silk spinner — big floaty arcs
     color: 0xc86ad8, style: 'fletch' },
-  wafaa: { speed: 7.3, accel: 50, friction: 66, jump: 11.0, hp: 2,
+  wafaa: { speed: 7.3, accel: 50, friction: 66, jump: 10.3, hp: 2,
     steer: 1.15,                         // loyal heart — never breaks form
     color: 0x2fae8f, style: 'cap' },
-  duha:  { speed: 7.2, accel: 46, friction: 54, jump: 11.6, hp: 2,
+  duha:  { speed: 7.2, accel: 46, friction: 54, jump: 10.9, hp: 2,
     airCtrl: 1.25,                       // morning light — glides on air
     color: 0xffcf9e, style: 'cap' },
-  dolar: { speed: 7.25, accel: 46, friction: 55, jump: 10.6, hp: 2,
+  dolar: { speed: 7.25, accel: 46, friction: 55, jump: 10.0, hp: 2,
     color: 0xb8c4d0, style: 'cap' },     // silver hustler — quick, level head
-  scoozy:{ speed: 7.45, accel: 60, friction: 12, jump: 9.4, hp: 1, steer: 1.1,
+  scoozy:{ speed: 7.45, accel: 60, friction: 12, jump: 8.8, hp: 1, steer: 1.1,
     color: 0x35c8f0, style: 'fletch' },  // on wheels: icy, sharp, slippery
-  faris: { speed: 7.1, accel: 40, friction: 70, jump: 10.2, hp: 3,
+  faris: { speed: 7.1, accel: 40, friction: 70, jump: 9.6, hp: 3,
     steer: 1.2,                          // tank with the sharpest cuts
     color: 0xd8d4c8, style: 'keffiyeh' },
-  glorious: { speed: 7.15, accel: 44, friction: 66, jump: 10.8, hp: 3,
+  glorious: { speed: 7.15, accel: 44, friction: 66, jump: 10.1, hp: 3,
     steer: 1.1, color: 0xf0b428, style: 'crown' }, // gold tank — dies loudly
 };
 export const HERO_IDS = Object.keys(CHARACTERS);
+
+// Hero-grid cursor step (select screen). Horizontal wraps around the row;
+// vertical moves exactly one row and NEVER leaves the grid — the last row
+// is short, so Down from it stays put instead of hopping columns.
+export function stepHeroGrid(cur, dx, dy, cols, len) {
+  if (dy) {
+    const next = cur + dy * cols;
+    return next < 0 || next >= len ? cur : next;
+  }
+  return (cur + dx + len) % len;
+}
 
 // Capsule size: total height = 2*(HALF+RADIUS) = 1.26m. The renderer must
 // keep the mesh in sync (0.9x of the 1.4m full-size build) — derive from
@@ -85,6 +96,7 @@ export class Player {
     this.grounded = true;
     this.coyote = 0;
     this.buffer = 0;
+    this.jumpLatch = false;  // one jump per press — clears on key release
     this.cutArmed = false; // jump-cut fires once per jump
     this.spinT = 0;        // >0 frames left of spin-attack
     this.animT = 0;        // walk-cycle clock
@@ -176,8 +188,14 @@ export class Player {
       this.vx = approach(this.vx, 0, d.friction * dt);
     }
 
-    // jump: buffer the press, consume within buffer or coyote window
-    if (flags.jump && !stunned) this.buffer = BUFFER;
+    // jump: buffer the press, consume within buffer or coyote window.
+    // ONE jump per press (player asked): while the key stays held no new
+    // jump arms — it must be released first. This immunises the jump
+    // against OS auto-repeat, pad jitter and any caller that leaks a
+    // held flag through flags.jump. The buffer (press just before land)
+    // still works — a press counts only after a release.
+    if (!flags.jump && !flags.jumpHeld) this.jumpLatch = false;
+    if (flags.jump && !stunned && !this.jumpLatch) this.buffer = BUFFER;
     else if (this.buffer > 0) this.buffer -= 1;
     if (this.buffer > 0 && (this.grounded || this.coyote > 0)) {
         this.jumped = true;
@@ -186,6 +204,7 @@ export class Player {
       this.cutArmed = true;
       this.coyote = 0;
       this.buffer = 0;
+      this.jumpLatch = true;      // re-arms when the key comes up
     }
     // variable height: releasing early cuts the rise exactly once
     if (this.cutArmed && !flags.jumpHeld && this.vy > 0) {
@@ -193,10 +212,10 @@ export class Player {
       this.cutArmed = false;
     }
 
-    // gravity: hold-jump rises floatier, floaty heroes drift down,
-    // spin drags you to the floor
+    // gravity: ONE fixed arc — holding the button never stretches the rise
+    // (the old 0.82× hold-gravity made a held jump climb ~25% higher and
+    // felt like the hero "kept going up"; tap or hold, same ceiling).
     let g = 26;
-    if (this.vy > 0 && flags.jumpHeld) g *= 0.82;
     if (this.vy < 0 && d.floaty) g *= 0.62;
     if (this.spinT > 0 && this.vy < 0) g *= 1.4;
     this.vy = Math.max(this.vy - g * dt, -32);

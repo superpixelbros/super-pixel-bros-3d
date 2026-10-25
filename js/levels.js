@@ -150,7 +150,7 @@ function newCourse(theme) {
     theme,
     segs: [], steps: [], shoulders: [], coins: [], hammers: [], pillars: [],
     pendulums: [], rollers: [], pistons: [], crumbles: [], bounces: [],
-    winds: [],
+    winds: [], crates: [],
     checkpoints: [], decor: [], jumpZones: [],
     walls: [], gates: [],       // blocking walls + portcullis gates
     boosts: [], curses: [],     // speed pickups {x, y, z, taken}
@@ -173,7 +173,12 @@ export function makeGate(R, world, z, o = {}) {
   return { body, z, cx, gw, h, period, phase, open: false, lift: 0 };
 }
 
-// ------------------------------------------------------- STAGE 1: SHORE
+// ------------------------------------------------- STAGE (DORMANT): SHORE
+// Sunny Shore is RETIRED from LEVELS (Oct 2026 difficulty wave) but kept
+// here, fully wired and dormant, for a future relax/easy mode: build(R,
+// world) still works; its i18n keys (level.beach) stay in both tables.
+// Sunny Shore v2: the old friendliest stage — first chicane gate, a slow
+// roller + counter-phase pendulum duet, and the boost/jinx debut.
 
 const THEME_SHORE = {
   sky: 0x9ad8f5, sand: 0xe7d29a, sandDark: 0xd3ba7e, rock: 0xa9a294,
@@ -248,20 +253,35 @@ export function buildShore(R, world) {
   return c;
 }
 
-// ------------------------------------------------- STAGE 2: SUNSET RIDGE
+// ------------------------------------------------ STAGE 1: DAYBREAK RIDGE
+// The Ridge at dawn: the proven v2 gauntlet (canyon weave, portcullis
+// queue, the Needle) under a bright THEME_DAY sky. Same geometry the whole
+// roster clears — the difficulty bump over old Shore is the layout itself.
+// Stage 1's gate is top-3 of 4; must-win pressure starts at stage 2.
+
+const THEME_DAY = {
+  sky: 0x9ad8f5, sand: 0xd8c49a, sandDark: 0xbfa97c, rock: 0x9a958a,
+  wood: 0x8a5a33, sea: 0x3a9ad8, sun: 0xfffaea, hemiGround: 0x7a7a62,
+};
+
+// ------------------------------------------------ STAGE 2: SUNSET RIDGE
+// v3 — the LONG one: the full v2 gauntlet as the first half (z 0–100),
+// then a fresh second half (z 100–200): hammer alley, a crumble crossing
+// over the void, a tighter four-wall canyon weave swept by a roller, a
+// TWIN portcullis queue, a direction-flipping crosswind ledge, and Needle
+// v2 with a triple pendulum dancing out of it. Still must win.
 
 const THEME_RIDGE = {
   sky: 0xf0985a, sand: 0xe0a06a, sandDark: 0xc2854f, rock: 0x9c6b4a,
   wood: 0x7a4a2c, sea: 0x2a6ea0, sun: 0xffd9a8, hemiGround: 0x6a4a3a,
 };
 
-// Sunset Ridge v2: the gauntlet learned to BEND. A canyon weave of
-// alternating walls forces right-left-right chicanes over shoulder-less
-// ground, a piston-slamming portcullis queues the pack at a one-lane slit,
-// and THE NEEDLE — a single-file stone throat with wrecking balls dancing
-// right behind it — decides who wears gold. passPlace stays 1: win it here.
-export function buildRidge(R, world) {
-  const c = newCourse(THEME_RIDGE);
+// The shared first half of both Ridge stages (z 0–100). The canyon weave
+// of alternating walls forces right-left-right chicanes over shoulder-less
+// ground, a portcullis queues the pack at a one-lane slit, and THE NEEDLE
+// — a single-file stone throat with wrecking balls right behind it —
+// decides who wears gold.
+function ridgeFirstHalf(R, world, c) {
   const { ground, coinRow, decor, wall } = kit(R, world, c);
 
   ground(0, 14);
@@ -348,22 +368,321 @@ export function buildRidge(R, world) {
   c.boosts.push({ x: 0, y: 1.5, z: 93.6, taken: false });
 
   c.jumpZones.push(
-    [13.2, 14.0], [37.7, 38.5], [47.2, 48.0],
+    [13.2, 14.0], [37.2, 38.6], [46.7, 48.2],
     [56.2, 57.1], [58.8, 59.7], [61.2, 62.1],
     [75.2, 76.0], [79.2, 80.0],
   );
-  c.finishZ = 99.5;
-  c.spawn = { x: 0, y: 1.6, z: 0 };
-  c.coinTotal = c.coins.length;
 
   for (let z = 6; z < 96; z += 14.5) {
     decor('palm', (z / 14.5 | 0) % 2 ? 6.6 : -6.6, z);
   }
   decor('rock', 5.8, 20); decor('rock', -6, 66); decor('rock', 6, 80);
+}
+
+export function buildDayRidge(R, world) {
+  const c = newCourse(THEME_DAY);
+  ridgeFirstHalf(R, world, c);
+  c.finishZ = 99.5;
+  c.spawn = { x: 0, y: 1.6, z: 0 };
+  c.coinTotal = c.coins.length;
   return c;
 }
 
-// ------------------------------------------------- STAGE 3: BUMPER ARENA
+export function buildRidgeLong(R, world) {
+  const c = newCourse(THEME_RIDGE);
+  ridgeFirstHalf(R, world, c);
+  const { ground, coinRow, decor, wall } = kit(R, world, c);
+
+  // ================= SECOND HALF (z 100–200): the gauntlet doubles =========
+  // gap out of the old flag ground: 3m
+  c.jumpZones.push([99.2, 100.6]);
+  coinRow(100.1, 102.8, 3, 1.25);
+
+  // --- HAMMER ALLEY: two turnstiles in counter-phase on wide ground
+  ground(103, 121);
+  c.hammers.push(
+    makeHammer(R, world, 107.5, 1.6, 0),
+    makeHammer(R, world, 114.5, 1.6, Math.PI));
+  coinRow(105, 108, 2, 0.9, -2.4);
+  coinRow(110, 112.5, 2, 0.9, 2.4);
+  c.boosts.push({ x: 0, y: 1.5, z: 104.8, taken: false });
+  c.checkpoints.push({ z: 119.5, x: 0, y: 1.6 });   // before the crossing!
+
+  // --- CRUMBLE CROSSING: three slabs over the void, 1.1m gaps — step on
+  // one too slowly and it drops while you stand there. Shoulder-less the
+  // whole way; the checkpoint sits BEFORE it (hazard law), coins bait the
+  // arc over each gap.
+  c.crumbles.push(
+    makeCrumble(R, world, 121, 123.4, { x0: -2.4, x1: 2.4 }),
+    makeCrumble(R, world, 124.5, 126.9, { x0: -2.4, x1: 2.4 }),
+    makeCrumble(R, world, 128, 130.4, { x0: -2.4, x1: 2.4 }));
+  c.jumpZones.push([122.7, 123.8], [126.2, 127.3]);
+  coinRow(123.6, 124.3, 2, 1.35);
+  coinRow(127.1, 127.8, 2, 1.35);
+
+  // --- CANYON WEAVE II: FOUR walls, gates tightened 3.2m → 2.8m, the void
+  // policing every miss, and a roller sweeping the stretch between walls
+  // two and three. Checkpoint sits at the weave mouth. The roller stretch
+  // keeps EARTH shoulders (hazard law: a knockback hit must never drop you
+  // straight into the void — the void still polices the wall chicanes).
+  ground(130.4, 139.2, 0, -4.5, 4.5, 0);
+  ground(139.2, 144, 0);                                  // roller: safe floor
+  ground(144, 152, 0, -4.5, 4.5, 0);
+  c.checkpoints.push({ z: 131.5, x: 0, y: 1.6 });
+  wall(-4.8, -2.8, 134.4, 135.2); wall(0, 4.8, 134.4, 135.2);     // gap L
+  wall(-4.8, 0, 138.4, 139.2);    wall(2.8, 4.8, 138.4, 139.2);   // gap R
+  c.rollers.push(makeRoller(R, world, 141.6, { amp: 2.4, omega: 1.7 }));
+  wall(-4.8, -2.8, 143.6, 144.4); wall(0, 4.8, 143.6, 144.4);     // gap L
+  wall(-4.8, 0, 147.6, 148.4);    wall(2.8, 4.8, 147.6, 148.4);   // gap R
+  c.narrows.push([133.1, 135.5, 1.0, -1.4], [137.1, 139.5, 1.0, 1.4],
+    [142.3, 144.7, 1.0, -1.4], [146.3, 148.7, 1.0, 1.4]);
+  coinRow(134.8, 134.8, 1, 0.9, -1.4);
+  coinRow(138.8, 138.8, 1, 0.9, 1.4);
+  coinRow(144.0, 144.0, 1, 0.9, -1.4);
+  coinRow(148.0, 148.0, 1, 0.9, 1.4);
+  c.curses.push({ x: 1.8, y: 1.4, z: 132.0, taken: false });
+
+  // --- TWIN PORTCULLIS QUEUE: two one-lane slits, counter-phase gates —
+  // the pack queues, splits, and queues again
+  ground(152, 163);
+  wall(-4.8, -2.65, 154, 155); wall(-1.35, 4.8, 154, 155);
+  c.gates.push(makeGate(R, world, 154.5, { cx: -2, gw: 1.3, period: 3.2 }));
+  c.narrows.push([152.9, 155.7, 0.55, -2]);
+  wall(-4.8, -1.35, 158.5, 159.5); wall(2.65, 4.8, 158.5, 159.5);
+  c.gates.push(makeGate(R, world, 159,
+    { cx: 2, gw: 1.3, period: 3.2, phase: Math.PI }));
+  c.narrows.push([157.4, 160.2, 0.55, 2]);
+  coinRow(154.5, 154.5, 1, 0.9, -2);
+  coinRow(159, 159, 1, 0.9, 2);
+  c.checkpoints.push({ z: 162, x: 0, y: 1.6 });
+
+  // --- CROSSWIND LEDGE II: the wind FLIPS direction halfway across —
+  // lean in, then lean the other way before the far edge
+  ground(163, 176, 0, -3, 3, 0);
+  c.winds.push(makeWind(R, world, 163.2, 169.5, { dir: 1, force: 2.2 }));
+  c.winds.push(makeWind(R, world, 169.5, 175.8, { dir: -1, force: 2.2 }));
+  c.narrows.push([162.8, 176.2, 1.6]);
+  coinRow(164, 175, 4);
+  c.curses.push({ x: 0, y: 1.4, z: 167, taken: false });
+
+  // gap off the ledge: 3m
+  c.jumpZones.push([175.2, 176.6]);
+  coinRow(176.1, 178.8, 3, 1.25);
+
+  // --- NEEDLE v2: a 2m single-file throat, then a TRIPLE pendulum — no
+  // two racers leave the stones side by side, and the balls decide who
+  // leaves them standing
+  ground(179, 200);
+  c.checkpoints.push({ z: 179.8, x: 0, y: 1.6 });
+  wall(-4.8, -0.575, 181.5, 183.5); wall(0.575, 4.8, 181.5, 183.5);
+  c.narrows.push([180.1, 183.7, 0.45, 0]);
+  coinRow(182.5, 182.5, 1, 0.9, 0);
+  c.pendulums.push(
+    makePendulum(R, world, 186, { ampA: 1.05, omega: 2.3, phase: 0 }),
+    makePendulum(R, world, 187.6, { ampA: 1.05, omega: 2.3, phase: Math.PI }),
+    makePendulum(R, world, 189.2, { ampA: 1.05, omega: 2.3, phase: Math.PI / 2 }));
+
+  // --- FINAL SPRINT: grab the boost out of the pendulum dance; a parting
+  // hammer guards the flag
+  c.boosts.push({ x: 0, y: 1.5, z: 190.5, taken: false });
+  c.hammers.push(makeHammer(R, world, 196.5, 1.9, 0));
+  coinRow(197.5, 199.5, 2, 0.9, 2.4);
+
+  c.finishZ = 199.5;
+  c.spawn = { x: 0, y: 1.6, z: 0 };
+  c.coinTotal = c.coins.length;
+
+  for (let z = 104; z < 196; z += 14.5) {
+    decor('palm', (z / 14.5 | 0) % 2 ? 6.6 : -6.6, z);
+  }
+  decor('rock', -5.8, 105); decor('rock', 6, 152); decor('rock', -6, 195);
+  return c;
+}
+
+// ------------------------------------------- STAGE 3: CRATE COVE (last one
+// stands). Twelve wooden crates float on the open sea. They give way one by
+// one in a shuffled, ESCALATING order — a wobble telegraphs each drop — and
+// the sea is the only judge: no hearts, no checkpoints, no clock-out. Four
+// runners (you + the three rivals) hop from deck to deck; when only one
+// runner is left dry, that runner wins. The very last crate never sinks:
+// somebody has to host the trophy scuffle.
+//
+// mode 'crates': free two-axis control like the arena, RIVALS INCLUDED —
+// their autopilot (rivals.js crateHop) reads the sink schedule just like
+// the hero's eyes do, so every elimination is earned.
+
+export const CRATES = {
+  half: 1.2,         // crate footprint (2.4m square)
+  top: 0.8,          // deck height
+  sinkDepth: 4.2,    // how far under the crate rides
+  tele: 0.9,         // wobble warning before a crate starts going
+  sinkT: 1.3,        // seconds from deck to below-deck
+  drown: -1.0,       // runners at/below this y are in the water — out
+  firstT: 6,         // the first deck gives way at 6s
+  // strict last-survivor: no buzzer. Once only ONE deck is left it waits
+  // `grace` seconds, then SHRINKS (1.2m → 0.35m half-extent) over `shrinkT`
+  // — a sumo ring. Whoever is still dry when every rival has gone in wins;
+  // if two somehow balance, the deck finally sinks and takes them both.
+  grace: 4,
+  shrinkT: 12,
+  shrinkTo: 0.35,
+};
+
+// deterministic shuffle (mulberry32) — course build happens once per run
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function buildCrates(R, world, seed = (Date.now() | 0) % 2147483647) {
+  const c = newCourse(THEME_CRATES);
+  c.isCrates = true;
+
+  // 4 × 3 grid, 1.5m water gaps between decks
+  const xs = [-5.85, -1.95, 1.95, 5.85];
+  const zs = [-3.9, 0, 3.9];
+  for (const x of xs) {
+    for (const z of zs) {
+      const body = world.createRigidBody(
+        R.RigidBodyDesc.kinematicPositionBased()
+          .setTranslation(x, CRATES.top - 1.4, z));
+      const collider = world.createCollider(
+        R.ColliderDesc.cuboid(CRATES.half, 1.4, CRATES.half), body);
+      c.crates.push({ body, collider, x, z, half: CRATES.half,
+        sinkAt: Infinity, sunk: false, jitter: 0 });
+    }
+  }
+
+  // escalating sink order: shuffle the crates, deal them a shrinking
+  // cadence (8s → 3s apart); the last one standing is immortal
+  const rnd = mulberry32(seed);
+  const order = c.crates.map((k, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  let t = CRATES.firstT;
+  for (let i = 0; i < order.length - 1; i++) {
+    c.crates[order[i]].sinkAt = t;
+    t += 7 - i * 0.45;                   // 7s → 2.5s apart (escalating)
+  }
+
+  // deck coins (the sea swallows the rest — greed has a price here)
+  c.coins.push(
+    { x: 0, y: 1.5, z: 0, taken: false },
+    { x: 5.85, y: 1.5, z: -3.9, taken: false },
+    { x: -5.85, y: 1.5, z: 3.9, taken: false });
+
+  // ---- sea life: the cove is somewhere, not nowhere ----------------------
+  // (pure decor — no colliders on any of it, nothing here can hurt you)
+  c.decor.push(
+    { kind: 'buoy', x: -9.2, z: -6.4, ph: 0 },
+    { kind: 'buoy', x: 9.0, z: -6.0, ph: 1.7 },
+    { kind: 'buoy', x: 9.3, z: 6.5, ph: 3.1 },
+    { kind: 'buoy', x: -9.0, z: 6.2, ph: 4.5 },
+    { kind: 'pier', x: -13.5, z: 0 },          // a sagging jetty
+    { kind: 'boat', x: -11.2, z: 2.6, ph: 0 }, // a rowboat tied up
+    { kind: 'lighthouse', x: 27, z: -30 },     // the far shore
+    { kind: 'stack', x: -25, z: -32, s: 1.4 }, // sea stacks on the horizon
+    { kind: 'stack', x: 13, z: -36, s: 1.0 },
+    { kind: 'stack', x: -3, z: -38, s: 1.2 },
+    { kind: 'torch', x: -4.95, z: 3.0 },       // tiki light on two decks
+    { kind: 'torch', x: 4.95, z: -3.0 },
+    { kind: 'gull', r: 15, h: 9.5, ph: 0 },    // the flock
+    { kind: 'gull', r: 18, h: 11, ph: 2.2 },
+    { kind: 'gull', r: 12, h: 8.5, ph: 4.3 },
+    { kind: 'drift', x: 10.4, z: -1.6, ph: 0.6 },  // driftwood
+    { kind: 'drift', x: -9.8, z: 2.2, ph: 2.9 },
+  );
+
+  // five dry starts: P1, P2 (2P), then the three rivals on the remaining
+  // corners + the middle deck
+  c.spawnPads = [[-5.85, -3.9], [5.85, 3.9], [-5.85, 3.9], [5.85, -3.9],
+    [1.95, 0]];
+  c.spawn = { x: -5.85, y: 1.6, z: -3.9 };
+  c.showdownAt = null;   // frame the final deck starts shrinking
+  c.finishZ = Infinity;
+  c.coinTotal = c.coins.length;
+  return c;
+}
+
+const THEME_CRATES = {
+  sky: 0xbfe6f5, sand: 0xd8c49a, sandDark: 0xbfa97c, rock: 0x8b9a9a,
+  wood: 0x9a6a3c, sea: 0x1878b8, sun: 0xfffaea, hemiGround: 0x5a7a8a,
+};
+
+// Animate the decks: idle bob → wobble telegraph → slide under. Pure
+// function of the frame; game + renderer + tests agree every tick.
+// Strict last-survivor: the very LAST deck holds still for `grace` seconds,
+// then SHRINKS to a capsule-sized sumo ring. Runners drift to the middle
+// as the edge vanishes; whoever is still dry when the rest are swimming
+// wins. If two ever balance on the last tile, it finally gives way and
+// takes them both — the stage can always terminate.
+export function crateStep(course, frame) {
+  if (!course.crates) return;
+  const t = frame / 60;
+  const bob = Math.sin(frame * 0.045) * 0.045;
+  const left = course.crates.filter((k) => !k.sunk).length;
+  if (left <= 1 && course.showdownAt == null) {
+    course.showdownAt = frame + Math.round(CRATES.grace * 60);
+  }
+  for (const k of course.crates) {
+    if (k.sinkAt === Infinity && !k.sunk) {   // the showdown deck
+      const e = course.showdownAt != null
+        ? (frame - course.showdownAt) / 60 : -1;
+      if (e < 0) {                            // grace: just bobbing
+        k.jitter = 0;
+        k.body.setNextKinematicTranslation(
+          { x: k.x, y: CRATES.top - 1.4 + bob, z: k.z });
+        continue;
+      }
+      if (e < CRATES.shrinkT) {               // shrinking sumo ring
+        const s = e / CRATES.shrinkT;
+        const half = CRATES.half + (CRATES.shrinkTo - CRATES.half) * s;
+        k.half = half;
+        k.jitter = Math.sin(frame * 0.7) * 0.02;
+        k.collider.setHalfExtents(half, 1.4, half);
+        k.body.setNextKinematicTranslation(
+          { x: k.x + k.jitter, y: CRATES.top - 1.4 + bob, z: k.z });
+        continue;
+      }
+      // safety valve: two runners balanced — the last tile gives way
+      const s = Math.min(1, (e - CRATES.shrinkT) / CRATES.sinkT);
+      k.half = CRATES.shrinkTo;
+      k.collider.setHalfExtents(CRATES.shrinkTo, 1.4, CRATES.shrinkTo);
+      k.jitter = 0;
+      k.body.setNextKinematicTranslation({
+        x: k.x, y: CRATES.top - 1.4 - s * CRATES.sinkDepth, z: k.z });
+      if (s >= 1) k.sunk = true;
+      continue;
+    }
+    if (t < k.sinkAt) {                  // afloat: gentle bob
+      k.jitter = 0;
+      k.body.setNextKinematicTranslation({ x: k.x, y: CRATES.top - 1.4 + bob, z: k.z });
+    } else if (!k.sunk) {
+      const e = t - k.sinkAt;
+      if (e < CRATES.tele) {             // telegraph: shake + warning tilt
+        k.jitter = Math.sin(frame * 1.9) * 0.07;
+        k.body.setNextKinematicTranslation({
+          x: k.x + k.jitter, y: CRATES.top - 1.4 + bob, z: k.z });
+      } else {
+        const s = Math.min(1, (e - CRATES.tele) / CRATES.sinkT);
+        k.body.setNextKinematicTranslation({
+          x: k.x, y: CRATES.top - 1.4 - s * CRATES.sinkDepth, z: k.z });
+        if (s >= 1) { k.sunk = true; k.jitter = 0; }
+      }
+    } else {                             // on the bottom, staying put
+      k.body.setNextKinematicTranslation({ x: k.x, y: CRATES.top - 1.4 - CRATES.sinkDepth, z: k.z });
+    }
+  }
+}
+
+// ------------------------------------------------- STAGE 4: BUMPER ARENA
 
 const THEME_ARENA = {
   sky: 0x8fd2e8, sand: 0xe8d9a8, sandDark: 0xc9b578, rock: 0x8b7d6a,
@@ -545,8 +864,13 @@ export function hazardTouch(course, pos) {
   // rotating hammer: the bar is a long slab sweeping in the X-Z plane. The
   // hero is hit when the bar's line passes through their capsule (perp
   // distance small) within the bar's reach along its length.
+  // Y-GATES (Oct 2026 phantom-hit fix): these hazards are sensors, so
+  // damage must only land when the hero actually overlaps the VISIBLE
+  // volume. Bar/log tops sit knee-high — jumping them is the whole point,
+  // and standing clear above one must never knock. Each gate = visual top
+  // + capsule radius + a hair of grace.
   for (const h of course.hammers) {
-    if (h.active === false) continue;
+    if (h.active === false || pos.y > 1.3) continue;   // bar top ≈ 0.82
     const dx = pos.x, dz = pos.z - h.z, a = h.harm || 0;
     const ux = Math.cos(a), uz = -Math.sin(a);       // along the bar
     const nx = Math.sin(a), nz = Math.cos(a);        // bar normal
@@ -559,17 +883,19 @@ export function hazardTouch(course, pos) {
   for (const p of course.pendulums) {
     if (p.active === false) continue;
     const dx = pos.x - p.bx, dy = pos.y - p.by, dz = pos.z - p.z;
-    if (Math.hypot(dx, dy, dz) < p.r + R_)
+    if (Math.hypot(dx, dy, dz) < p.r + R_ - 0.08)     // hair of grace
       return { kx: Math.sign(p.vel) * 6.2, kz: -2.5 };
   }
   for (const r of course.rollers) {
-    if (r.active === false) continue;
+    if (r.active === false || pos.y > r.r * 2 + 0.5) continue;  // log top
     if (Math.abs(pos.x - r.bx) < 0.62 + R_
       && Math.abs(pos.z - r.z - (r.bz || 0)) < r.r + R_)
       return { kx: Math.sign(r.vel) * 5.8, kz: -3 };
   }
   for (const p of course.pistons) {
-    if (p.active === false) continue;
+    // The piston really is 2.8m tall ("too tall to jump"), so it keeps a
+    // wide y-window — but a hero at full jump apex over the top is clear.
+    if (p.active === false || pos.y > p.hy * 2 + 0.3) continue;
     if (Math.abs(pos.x - p.bx) < 0.7 + R_ && Math.abs(pos.z - p.z) < 0.5 + R_)
       return { kx: Math.sign(p.vel) * 6.6, kz: -2 };
   }
@@ -588,11 +914,23 @@ export function windAt(course, pos) {
 // (headless asserts ≥1.6× the slowest hero's clear) so it pressures pace
 // without punishing learning the course. mode 'survival' levels ignore the
 // clock/flag: they END when the ring swallows you (over) or 90s pass (win).
+// Diorama geometry: node i sits at x = i * MAP_SPACING. One source of truth
+// for the map walk (game) and the islands/camera framing (renderer).
+export const MAP_SPACING = 6;
+
+// Sunny Shore is DORMANT (Oct 2026 difficulty wave): the builder lives on
+// above, off the ladder, for a possible relax mode. Two Ridge stages open
+// the frontier — the same gauntlet at dawn (top-3 gate), then the
+// double-length Sunset Ridge (must win) — and behind them the sea ladder:
+// CRATE COVE (last of 4 runners dry wins) gates the Bumper Arena, whose
+// win is the trophy.
 export const LEVELS = [
-  { id: 'shore', nameKey: 'level.beach', build: buildShore, theme: THEME_SHORE,
-    timeLimit: 45, passPlace: 3 },
-  { id: 'ridge', nameKey: 'level.ridge', build: buildRidge, theme: THEME_RIDGE,
-    timeLimit: 90, passPlace: 1 },
+  { id: 'dayridge', nameKey: 'level.dayridge', build: buildDayRidge,
+    theme: THEME_DAY, timeLimit: 90, passPlace: 3 },
+  { id: 'ridge', nameKey: 'level.ridge', build: buildRidgeLong,
+    theme: THEME_RIDGE, timeLimit: 165, passPlace: 1 },
+  { id: 'crates', nameKey: 'level.crates', build: buildCrates,
+    theme: THEME_CRATES, mode: 'crates', passPlace: 99 },
   { id: 'arena', nameKey: 'level.arena', build: buildArena, theme: THEME_ARENA,
     mode: 'survival', passPlace: 99 },
 ];

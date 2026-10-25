@@ -4,7 +4,7 @@
 // (three, rapier) are part of the shell — they only change on re-vendor.
 // Not registered on localhost (see main.js).
 
-const VERSION = 'spb3d-v0.9.2';
+const VERSION = 'spb3d-v0.9.7';
 const CACHE = VERSION + '-shell';
 
 const ASSETS = [

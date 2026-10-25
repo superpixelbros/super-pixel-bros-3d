@@ -15,6 +15,7 @@ export class UI {
     this.cb = cb;
     this.heroIndex = 0;
     this.padOn = null;          // last published gamepad status
+    this.twoPlayerUI = false;   // split HUD visibility
     this.root.innerHTML = `
       <div class="screen" id="sc-title">
         <div class="panel center grow">
@@ -31,13 +32,28 @@ export class UI {
             </div>
             <span class="pad-status">🎮 <span id="pad-status"></span></span>
           </div>
+          <div class="input-row">
+            <span class="input-label" data-key="opt.players"></span>
+            <div class="seg">
+              <button class="btn seg-btn" id="b-p1" data-key="opt.one"></button>
+              <button class="btn seg-btn" id="b-p2" data-key="opt.two"></button>
+            </div>
+            <span class="pad-status dim" id="p2-note"></span>
+          </div>
+          <div class="input-row">
+            <span class="input-label" data-key="opt.split"></span>
+            <div class="seg">
+              <button class="btn seg-btn" id="b-split-v" data-key="opt.splitv"></button>
+              <button class="btn seg-btn" id="b-split-h" data-key="opt.splith"></button>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="screen hidden" id="sc-select">
         <div class="select-wrap">
           <div class="pick-half">
-            <h2 class="pick-title" data-key="choose_hero"></h2>
+            <h2 class="pick-title" id="pick-title" data-key="choose_hero"></h2>
             <div class="hero-grid" id="hero-grid"></div>
             <div class="pick-bar">
               <button class="btn round" id="b-prev">◀</button>
@@ -66,6 +82,12 @@ export class UI {
         <div class="hud-box" id="hud-wave"></div>
       </div>
 
+      <div class="hud hud2 hidden" id="sc-hud2">
+        <div class="hud-box" id="hud2-a"></div>
+        <div class="hud-box" id="hud2-time"></div>
+        <div class="hud-box" id="hud2-b"></div>
+      </div>
+
       <div class="screen hidden" id="sc-pause">
         <div class="panel card">
           <h2 data-key="paused"></h2>
@@ -86,6 +108,7 @@ export class UI {
           <p class="result" id="clear-time"></p>
           <p class="result" id="clear-coins"></p>
           <p class="result" id="clear-place"></p>
+          <p class="result" id="clear-dual"></p>
           <button class="btn big accent" id="b-done" data-key="clear.hint"></button>
         </div>
       </div>
@@ -109,6 +132,7 @@ export class UI {
           <h2 data-key="lost.title"></h2>
           <p class="result" id="lost-place"></p>
           <p class="blurb" id="lost-rule"></p>
+          <p class="result" id="lost-dual"></p>
           <div class="col">
             <button class="btn big accent" id="b-lost-retry" data-key="lost.retry"></button>
             <button class="btn ghost" id="b-lost-title" data-key="pause.quit"></button>
@@ -124,6 +148,7 @@ export class UI {
           <p class="blurb" data-key="over.sub"></p>
           <p class="result" id="over-time"></p>
           <p class="result" id="over-best"></p>
+          <p class="result" id="over-dual"></p>
           <div class="col">
             <button class="btn big accent" id="b-over-retry" data-key="over.retry"></button>
             <button class="btn ghost" id="b-over-title" data-key="pause.quit"></button>
@@ -138,6 +163,7 @@ export class UI {
           <h2 data-key="win.title"></h2>
           <p class="trophy-sub" data-key="win.sub"></p>
           <p class="result" id="win-best"></p>
+          <p class="result" id="win-dual"></p>
           <p class="blurb" id="win-locked" data-key="win.locked"></p>
           <button class="btn big accent" id="b-win-title" data-key="win.hint_map"></button>
         </div>
@@ -178,6 +204,10 @@ export class UI {
     this.bind('b-start', () => this.cb.onStart());
     this.bind('b-in-kb', () => this.cb.onInputDevice('keyboard'));
     this.bind('b-in-pad', () => this.cb.onInputDevice('controller'));
+    this.bind('b-p1', () => this.cb.onPlayers(1));
+    this.bind('b-p2', () => this.cb.onPlayers(2));
+    this.bind('b-split-v', () => this.cb.onSplit('v'));
+    this.bind('b-split-h', () => this.cb.onSplit('h'));
     this.bind('b-prev', () => this.cb.onMove(-1));
     this.bind('b-next', () => this.cb.onMove(1));
     this.bind('b-play', () => this.cb.onPlay());
@@ -236,12 +266,16 @@ export class UI {
       mode === 'controller');
   }
 
-  // gamepad presence for the title row; text only re-renders on change
-  setPadStatus(on) {
-    if (on === this.padOn) return;
-    this.padOn = on;
+  // gamepad presence for the title row; accepts a COUNT (live) or a bool.
+  // Text only re-renders on change — the title polls this every frame so a
+  // pad that registers late (browsers expose pads after their first press)
+  // flips the PLAYERS row from disabled to available immediately.
+  setPadStatus(count) {
+    const n = typeof count === 'number' ? count : (count ? 1 : 0);
+    if (n === this.padOn) return;
+    this.padOn = n;
     this.root.querySelector('#pad-status').textContent =
-      t(on ? 'input.padYes' : 'input.padNo');
+      n > 0 ? t('input.padCount', { n }) : t('input.padNo');
   }
 
   // pause-menu highlight: ↑↓/stick cycles Resume/Restart/Title, ✕ picks
@@ -259,10 +293,71 @@ export class UI {
       over: ['sc-over'], win: ['sc-win'],
     };
     const ids = new Set(map[name] || []);
-    for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-pause', 'sc-clear',
-      'sc-dq', 'sc-lost', 'sc-map', 'sc-victory', 'sc-over', 'sc-win']) {
+    if (ids.has('sc-hud') && this.twoPlayerUI) ids.add('sc-hud2');
+    for (const id of ['sc-title', 'sc-select', 'sc-hud', 'sc-hud2', 'sc-pause',
+      'sc-clear', 'sc-dq', 'sc-lost', 'sc-map', 'sc-victory', 'sc-over',
+      'sc-win']) {
       this.root.querySelector('#' + id).classList.toggle('hidden', !ids.has(id));
     }
+  }
+
+  // PLAYERS row: 1P / 2P. 2P is only offered when a controller is present
+  // (browser keyboards cannot be told apart, so 2P always needs a pad).
+  // `pads` is the LIVE count: the note tells the player how the run will be
+  // split (two pads, or pad + keyboard) before they commit.
+  setPlayers(n, canTwo, pads = 0) {
+    const sig = `${n}|${canTwo}|${pads}`;
+    if (sig === this.playerSig) return;
+    this.playerSig = sig;
+    this.twoPlayerUI = n === 2 && canTwo;
+    const one = this.root.querySelector('#b-p1');
+    const two = this.root.querySelector('#b-p2');
+    one.classList.toggle('on', n !== 2 || !canTwo);
+    two.classList.toggle('on', this.twoPlayerUI);
+    two.disabled = !canTwo;
+    this.root.querySelector('#p2-note').textContent =
+      n === 2
+        ? (!canTwo ? t('opt.p2need')
+          : pads >= 2 ? t('opt.pads2') : t('opt.pads1'))
+        : (canTwo ? '' : t('opt.p2need'));
+  }
+
+  setSplit(mode) {
+    this.root.querySelector('#b-split-v').classList.toggle('on', mode !== 'h');
+    this.root.querySelector('#b-split-h').classList.toggle('on', mode === 'h');
+  }
+
+  // live column count of the hero grid (responsive auto-fill): used by the
+  // up/down arrows so a row step is always exactly one row, whatever the
+  // viewport width does to the layout
+  gridColumns() {
+    const el = this.root.querySelector('#hero-grid');
+    if (!el) return 4;
+    const cols = getComputedStyle(el).gridTemplateColumns;
+    const n = cols ? cols.split(' ').filter(Boolean).length : 0;
+    return n > 0 ? n : 4;
+  }
+
+  // select screen: pass 0 = P1 picks, pass 1 = P2 picks
+  setSelectPass(pass) {
+    const el = this.root.querySelector('#pick-title');
+    const key = pass === 1 ? 'pick2' : 'choose_hero';
+    el.dataset.key = key;
+    el.textContent = t(key);
+  }
+
+  // P2 HUD (split screen): the mode essentials in three compact boxes
+  hud2(a, time, b) {
+    const r = this.root.querySelector('#sc-hud2');
+    r.querySelector('#hud2-a').textContent = a || '';
+    r.querySelector('#hud2-time').textContent = time || '';
+    r.querySelector('#hud2-b').textContent = b || '';
+  }
+
+  // dual result line on a terminal card ('clear' | 'lost' | 'over' | 'win')
+  dual(which, text) {
+    const el = this.root.querySelector('#' + which + '-dual');
+    if (el) el.textContent = text || '';
   }
 
   // showcase anchor: the exact center of the stage half (screen center
@@ -360,6 +455,46 @@ export class UI {
       t('over.time', { t: fmtTime(timeSec) });
     r.querySelector('#over-best').textContent =
       bestSec > 0 ? t('over.best', { t: fmtTime(bestSec) }) : '';
+  }
+
+  // Crate Cove HUD: elapsed time + decks left where the wave counter lives;
+  // hearts play no part here — only the sea judges, and there is no buzzer
+  hudCrates(timeSec, cratesLeft) {
+    const r = this.root;
+    r.querySelector('#hud-coins').style.visibility = 'hidden';
+    r.querySelector('#hud-place').style.visibility = 'hidden';
+    r.querySelector('#hud-hearts').style.visibility = 'hidden';
+    const timeEl = r.querySelector('#hud-time');
+    timeEl.textContent = t('hud.time', { t: fmtTime(timeSec) });
+    timeEl.classList.remove('warn', 'crit');
+    const w = r.querySelector('#hud-wave');
+    w.style.visibility = 'visible';
+    w.textContent = t('hud.crates', { n: cratesLeft });
+  }
+
+  // Crate Cove win card: no best-time row, no locked trophy line — the
+  // button simply walks onward to the arena island
+  winCrates() {
+    const r = this.root;
+    r.querySelector('#win-best').textContent = '';
+    r.querySelector('#win-locked').style.display = 'none';
+    const b = r.querySelector('#b-win-title');
+    b.dataset.key = 'clear.hint_next';
+    b.textContent = t('clear.hint_next');
+  }
+
+  // Arena vs Crate Cove share the over/win cards — swap the flavour line
+  // (data-key included, so language toggles keep the right wording)
+  modeCards(mode) {
+    const set = (sel, key) => {
+      const el = this.root.querySelector(sel);
+      if (!el) return;
+      el.dataset.key = key;
+      el.textContent = t(key);
+    };
+    const crates = mode === 'crates';
+    set('#sc-over .blurb', crates ? 'over.sub.crates' : 'over.sub');
+    set('#sc-win .trophy-sub', crates ? 'win.sub.crates' : 'win.sub');
   }
 
   // win card: the trophy gleams only once the race ladder is done — until

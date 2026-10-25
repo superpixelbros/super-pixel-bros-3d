@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { view } from './view.js';
 import { buildHero, buildTrophy } from './models.js';
 import { CHARACTERS, HERO_RADIUS, HERO_HALF } from './hero.js';
-import { LEVELS, ARENA } from './levels.js';
+import { LEVELS, ARENA, CRATES, MAP_SPACING } from './levels.js';
 
 // capsule center → feet, derived from the collider constants
 const FEET = HERO_HALF + HERO_RADIUS;
@@ -31,6 +31,15 @@ export class Renderer {
 
     this.cam = new THREE.PerspectiveCamera(58, 16 / 9, 0.1, 160);
     this.cam.position.set(0, 3, -9);
+    // second player camera (split screen); same scene, own viewport
+    this.cam2 = new THREE.PerspectiveCamera(58, 16 / 9, 0.1, 160);
+    this.cam2.position.set(0, 3, -9);
+    this.cam2Pos = new THREE.Vector3(0, 3, -9);
+    this.cam2Look = new THREE.Vector3(0, 1, 0);
+    this.twoPlayer = false;
+    this.splitMode = 'v';        // 'v' side-by-side | 'h' stacked
+    this.hero2Parts = null;
+    this.hero2Key = '';
 
     this.hemi = new THREE.HemisphereLight(0xcfeaff, 0x8a7a55, 1.05);
     this.scene.add(this.hemi);
@@ -88,7 +97,7 @@ export class Renderer {
 
   // ---- adventure map diorama (persistent) --------------------------------
   // Two themed islands on the sea, bridge, a flag per stage, gold cursor
-  // ring. Node i sits at x = i*6 — keep in sync with Game.mapHeroPos().
+  // ring. Node i sits at x = i*MAP_SPACING — shared with Game.mapHeroPos().
   buildDiorama() {
     const g = this.diorama = new THREE.Group();
     g.visible = false;
@@ -105,30 +114,30 @@ export class Renderer {
           : new THREE.CylinderGeometry(1.55, 1.9, 0.9, 9),
         mat(lvl.theme.sand)
       );
-      island.position.set(i * 6, 0, 0);
+      island.position.set(i * MAP_SPACING, 0, 0);
       island.receiveShadow = true;
       g.add(island);
       if (arena) {
         const ring = new THREE.Mesh(
           new THREE.TorusGeometry(1.2, 0.06, 6, 24), mat(0xffd23e));
         ring.rotation.x = Math.PI / 2;
-        ring.position.set(i * 6, 0.5, 0);
+        ring.position.set(i * MAP_SPACING, 0.5, 0);
         g.add(ring);
       }
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.05, 0.05, 1.1, 6), mat(0xd8d4c8));
-      pole.position.set(i * 6 + 0.85, 1.0, -0.7);
+      pole.position.set(i * MAP_SPACING + 0.85, 1.0, -0.7);
       const flag = new THREE.Mesh(
         new THREE.BoxGeometry(0.5, 0.32, 0.03),
         mat(arena ? 0xffd23e : i === lastRace ? 0xffd23e : 0xe04a3f));
-      flag.position.set(i * 6 + 1.08, 1.36, -0.7);
+      flag.position.set(i * MAP_SPACING + 1.08, 1.36, -0.7);
       g.add(pole, flag);
     });
 
     for (let i = 0; i < LEVELS.length - 1; i++) {
       const bridge = new THREE.Mesh(
-        new THREE.BoxGeometry(3.4, 0.22, 0.7), mat(0x8a5a33));
-      bridge.position.set(i * 6 + 3, 0.34, 0);
+        new THREE.BoxGeometry(MAP_SPACING - 2.6, 0.22, 0.7), mat(0x8a5a33));
+      bridge.position.set(i * MAP_SPACING + MAP_SPACING / 2, 0.34, 0);
       g.add(bridge);
     }
 
@@ -138,6 +147,16 @@ export class Renderer {
     );
     this.mapRing.position.set(0, 0.48, 0);
     g.add(this.mapRing);
+
+    // travel beacon: a gold chevron bobbing over the node the hero is
+    // walking to — the map reads as a journey, not a jump cut
+    this.mapBeacon = new THREE.Mesh(
+      new THREE.ConeGeometry(0.34, 0.8, 4),
+      new THREE.MeshLambertMaterial({ color: 0xffd23e, emissive: 0x6a4b00 })
+    );
+    this.mapBeacon.rotation.x = Math.PI;    // point down at the island
+    this.mapBeacon.visible = false;
+    g.add(this.mapBeacon);
   }
 
   // ---- rival meshes (rebuilt every race) -----------------------------------
@@ -342,6 +361,38 @@ export class Renderer {
       this.arenaRing = ring;
     }
 
+    // Crate Cove: floating wooden decks — plank top over a deep hull so a
+    // sinking crate slides under convincingly. Bodies drive y every tick.
+    this.crateMeshes = (course.crates || []).map((k) => {
+      const g = new THREE.Group();
+      const hull = new THREE.Mesh(
+        new THREE.BoxGeometry(2.4, 2.8, 2.4), wood);
+      hull.castShadow = true;
+      const deck = new THREE.Mesh(
+        new THREE.BoxGeometry(2.44, 0.14, 2.44), mat(0xc89a5e));
+      deck.position.y = 1.4;
+      deck.receiveShadow = true;
+      g.add(hull, deck);
+      this.courseGroup.add(g);
+      // sea foam ring at the waterline
+      const foam = new THREE.Mesh(
+        new THREE.TorusGeometry(1.75, 0.12, 6, 24),
+        new THREE.MeshLambertMaterial(
+          { color: 0xeaf6ff, transparent: true, opacity: 0.55 }));
+      foam.rotation.x = Math.PI / 2;
+      foam.position.set(k.x, -1.55, k.z);
+      this.courseGroup.add(foam);
+      // splash plume, fired the frame the deck goes under
+      const splash = new THREE.Mesh(
+        new THREE.ConeGeometry(1.5, 2.2, 10, 1, true),
+        new THREE.MeshLambertMaterial(
+          { color: 0xeaf6ff, transparent: true, opacity: 0.85 }));
+      splash.position.set(k.x, -0.5, k.z);
+      splash.visible = false;
+      this.courseGroup.add(splash);
+      return { k, g, foam, splash, splashT: -1 };
+    });
+
     // finish pad + flagpole (survival has no flag — only the clock)
     if (isFinite(course.finishZ)) {
       add(new THREE.Mesh(new THREE.BoxGeometry(9, 0.16, 2.4), mat(0xf4f1e8)),
@@ -353,6 +404,7 @@ export class Renderer {
         2.9, 3.7, course.finishZ + 1.4);
     }
 
+    this.crateLife = [];           // animated sea props (Crate Cove only)
     for (const d of course.decor) {
       if (d.kind === 'palm') {
         const g = new THREE.Group();
@@ -373,6 +425,115 @@ export class Renderer {
       } else if (d.kind === 'rock') {
         add(new THREE.Mesh(new THREE.DodecahedronGeometry(0.9), rock), d.x, 0.4, d.z)
           .castShadow = true;
+      } else if (d.kind === 'buoy') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.8, 10),
+          mat(0xe04a3f));
+        body.castShadow = true;
+        const band = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.3, 0.16, 10),
+          mat(0xf4f1e8));
+        band.position.y = 0.12;
+        const lamp = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.34, 8),
+          mat(0xffd23e));
+        lamp.position.y = 0.58;
+        g.add(body, band, lamp);
+        g.position.set(d.x, -1.42, d.z);
+        this.courseGroup.add(g);
+        this.crateLife.push({ kind: 'buoy', mesh: g, baseY: -1.42, ph: d.ph || 0 });
+      } else if (d.kind === 'pier') {
+        const g = new THREE.Group();
+        const deck = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.22, 1.6), wood);
+        deck.position.y = -1.05;
+        deck.castShadow = true;
+        g.add(deck);
+        for (const px of [-2.8, 0, 2.8]) {
+          for (const pz of [-0.6, 0.6]) {
+            const post = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.11, 0.13, 2.2, 6), wood);
+            post.position.set(px, -2.0, pz);
+            g.add(post);
+          }
+        }
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.22),
+          new THREE.MeshLambertMaterial({ color: 0xffd23e, emissive: 0x8a6a00 }));
+        lamp.position.set(-3.0, -0.8, 0);
+        g.add(lamp);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+      } else if (d.kind === 'boat') {
+        const g = new THREE.Group();
+        const hull = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.9), wood);
+        hull.position.y = 0.1;
+        hull.castShadow = true;
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.8),
+          mat(0xd8b890));
+        seat.position.y = 0.42;
+        g.add(hull, seat);
+        g.position.set(d.x, -1.5, d.z);
+        this.courseGroup.add(g);
+        this.crateLife.push({ kind: 'boat', mesh: g, baseY: -1.5, ph: d.ph || 0 });
+      } else if (d.kind === 'lighthouse') {
+        const g = new THREE.Group();
+        const tower = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.9, 1.6, 11, 10), mat(0xf4f1e8));
+        tower.position.y = 5.5;
+        const stripe = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.17, 1.3, 1.4, 10), mat(0xe04a3f));
+        stripe.position.y = 5.6;
+        const cap = new THREE.Mesh(
+          new THREE.ConeGeometry(1.15, 1.4, 10), mat(0x8a5a33));
+        cap.position.y = 11.7;
+        const light = new THREE.Mesh(new THREE.SphereGeometry(0.55, 10, 8),
+          new THREE.MeshLambertMaterial({ color: 0xfff2b0, emissive: 0xffd23e }));
+        light.position.y = 11.35;
+        g.add(tower, stripe, cap, light);
+        g.position.set(d.x, -1.7, d.z);
+        this.courseGroup.add(g);
+        this.crateLife.push({ kind: 'lighthouse', light, ph: 0 });
+      } else if (d.kind === 'stack') {
+        const s = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(1.2 * (d.s || 1)), rock);
+        s.scale.y = 2.6;
+        s.position.set(d.x, 1.3 * (d.s || 1) - 1.7, d.z);
+        s.castShadow = true;
+        this.courseGroup.add(s);
+      } else if (d.kind === 'torch') {
+        const g = new THREE.Group();
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.09, 1.5, 6), wood);
+        pole.position.y = 0.75;
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.5, 6),
+          new THREE.MeshLambertMaterial({ color: 0xffb03a, emissive: 0xff7a1a }));
+        flame.position.y = 1.62;
+        g.add(pole, flame);
+        g.position.set(d.x, 0.8, d.z);      // stands on the deck plate
+        this.courseGroup.add(g);
+        this.crateLife.push({ kind: 'torch', flame, ph: (d.x + d.z) * 0.7 });
+      } else if (d.kind === 'gull') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.16),
+          mat(0xf4f1e8));
+        const wingL = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.04, 0.22),
+          mat(0xe8e4da));
+        wingL.position.x = -0.45;
+        const wingR = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.04, 0.22),
+          mat(0xe8e4da));
+        wingR.position.x = 0.45;
+        g.add(body, wingL, wingR);
+        g.position.set(0, d.h || 9, 0);
+        this.courseGroup.add(g);
+        this.crateLife.push({ kind: 'gull', mesh: g, wingL, wingR,
+          r: d.r || 14, h: d.h || 9, ph: d.ph || 0 });
+      } else if (d.kind === 'drift') {
+        const g = new THREE.Group();
+        const log = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.22, 0.26, 2.2, 7), wood);
+        log.rotation.z = Math.PI / 2;
+        log.castShadow = true;
+        g.add(log);
+        g.position.set(d.x, -1.5, d.z);
+        this.courseGroup.add(g);
+        this.crateLife.push({ kind: 'drift', mesh: g, baseY: -1.5, ph: d.ph || 0 });
       }
     }
   }
@@ -431,6 +592,36 @@ export class Renderer {
     this.heroKey = key;
   }
 
+  // two-player split screen: on/off + orientation ('v' side-by-side, 'h'
+  // stacked). The render pass re-derives each viewport every frame.
+  setSplit(two, mode) {
+    const m = mode === 'h' ? 'h' : 'v';
+    if (this.twoPlayer === !!two && this.splitMode === m) return;
+    this.twoPlayer = !!two;
+    this.splitMode = m;
+    this.resize();
+  }
+
+  // P2's hero rig (null clears it for 1P / menu screens)
+  setP2Hero(id) {
+    const key = id ? 'play:' + id : '';
+    if (key === this.hero2Key) return;
+    if (this.hero2Parts) {
+      this.hero2Parts.group.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      this.scene.remove(this.hero2Parts.group);
+      this.hero2Parts = null;
+    }
+    this.hero2Key = key;
+    if (!id) return;
+    const def = CHARACTERS[id] || CHARACTERS.hero;
+    this.hero2Parts = buildHero(def);
+    this.hero2Parts.group.scale.setScalar(0.9);
+    this.scene.add(this.hero2Parts.group);
+  }
+
   // ---- per-frame ---------------------------------------------------------
   sync(game, state) {
     const t = performance.now() / 1000;
@@ -478,6 +669,52 @@ export class Renderer {
       }
       for (const pm of this.pillarMeshes) {
         pm.m.position.y = pm.body.translation().y;
+      }
+      for (const cm of this.crateMeshes || []) {
+        const tr = cm.k.body.translation();
+        cm.g.position.set(tr.x, tr.y, cm.k.z);
+        // the showdown deck shrinks — scale the mesh with the collider
+        const sc = (cm.k.half ?? CRATES.half) / CRATES.half;
+        cm.g.scale.set(sc, 1, sc);
+        // a sunken deck is gone from view entirely
+        cm.g.visible = tr.y > CRATES.top - 1.4 - CRATES.sinkDepth + 0.05;
+        // splash plume when the deck goes under, then the foam calms
+        if (cm.k.sunk && cm.splashT < 0) cm.splashT = t;
+        if (cm.splashT >= 0) {
+          const e = (t - cm.splashT) / 0.7;
+          cm.splash.visible = e < 1;
+          if (e < 1) {
+            cm.splash.scale.set(0.6 + e * 1.1, 0.5 + e * 1.8, 0.6 + e * 1.1);
+            cm.splash.material.opacity = 0.85 * (1 - e);
+          }
+        }
+        cm.foam.material.opacity = cm.k.sunk ? 0.16 : 0.55;
+      }
+      // cove life: buoys and boats ride the swell, gulls wheel, torches
+      // flicker, the lighthouse sweeps
+      for (const a of this.crateLife || []) {
+        if (a.mesh && a.kind !== 'gull') {
+          a.mesh.position.y = a.baseY + Math.sin(t * 1.3 + a.ph) * 0.09;
+          if (a.kind === 'boat') a.mesh.rotation.z = Math.sin(t * 1.1 + a.ph) * 0.06;
+          if (a.kind === 'drift') a.mesh.rotation.y = Math.sin(t * 0.4 + a.ph) * 0.6;
+        } else if (a.kind === 'gull') {
+          const ang = t * 0.25 + a.ph;
+          a.mesh.position.set(
+            Math.cos(ang) * a.r,
+            a.h + Math.sin(t * 0.8 + a.ph) * 0.5,
+            Math.sin(ang) * a.r);
+          a.mesh.rotation.y = -ang + Math.PI / 2;
+          const flap = Math.sin(t * 9 + a.ph) * 0.5;
+          a.wingL.rotation.z = flap;
+          a.wingR.rotation.z = -flap;
+        } else if (a.kind === 'torch') {
+          const f = 0.9 + Math.sin(t * 9 + a.ph) * 0.18;
+          a.flame.scale.set(f, 1 + Math.sin(t * 13 + a.ph) * 0.15, f);
+          a.flame.rotation.y = t * 2.4;
+        } else if (a.kind === 'lighthouse') {
+          a.light.material.emissiveIntensity =
+            0.35 + Math.max(0, Math.sin(t * 0.9)) * 1.8;
+        }
       }
       for (const hm of this.pendulumMeshes) {
         const tr = hm.p.body.translation();
@@ -536,6 +773,25 @@ export class Renderer {
         poseAir(p, this.heroParts);
       } else {
         poseWalk(p, this.heroParts, hp);
+      }
+    }
+
+    // P2 rig (split screen) — same posing rules, own hero
+    const inRun = state === 'play' || state === 'pause' || state === 'clear'
+      || state === 'dq' || state === 'lost' || state === 'over'
+      || state === 'win';
+    const p2 = (this.twoPlayer && inRun && game.players && game.players[1])
+      ? game.players[1] : null;
+    if (this.hero2Parts) {
+      this.hero2Parts.group.visible = !!p2;
+      if (p2) {
+        const q = p2.pos;
+        const g = this.hero2Parts.group;
+        g.position.set(q.x, q.y - FEET, q.z);
+        g.rotation.y = p2.yaw;
+        if (p2.spinT > 0) g.rotation.y += p2.spinT * 1.4;
+        else if (!p2.grounded) poseAir(p2, this.hero2Parts);
+        else poseWalk(p2, this.hero2Parts, g);
       }
     }
 
@@ -626,8 +882,15 @@ export class Renderer {
       this.heroParts.legR.rotation.x = -s;
       this.heroParts.armL.rotation.x = -s * 0.6;
       this.heroParts.armR.rotation.x = s * 0.6;
-      this.mapRing.position.x = game.map.cursor * 6;
+      this.mapRing.position.x = game.map.cursor * MAP_SPACING;
       this.mapRing.rotation.y = t * 0.8;
+      const mw = game.map.walk;
+      this.mapBeacon.visible = !!mw && mp.walking;
+      if (this.mapBeacon.visible) {
+        this.mapBeacon.position.set(mw.to * MAP_SPACING,
+          2.5 + Math.sin(t * 3) * 0.18, 0);
+        this.mapBeacon.rotation.y = t * 2.2;
+      }
     }
 
     // camera
@@ -639,15 +902,19 @@ export class Renderer {
         0, 1.1, -14
       );
     } else if (state === 'map') {
-      const mid = (LEVELS.length - 1) * 3;
-      this.lerpCam(
-        mid + Math.sin(t * 0.18) * 0.7, 4.3, 7.2,
-        mid, 0.5, 0
-      );
+      const mp = game.mapHeroPos();
+      const mid = (LEVELS.length - 1) * MAP_SPACING / 2;
+      const focus = mp.walking ? mp.x : mid + Math.sin(t * 0.18) * 0.5;
+      const c = this.mapCam(focus, !mp.walking);
+      this.lerpCam(c.x, c.y, c.z, focus, 0.55, 0);
     } else if (p && game.course && game.course.isArena) {
       // arena: a wide, deliberate tower cam — the whole ring in frame,
       // fixed yaw so WASD steering stays screen-true
       this.lerpCam(0, 15, -16, 0, 0.3, 2);
+    } else if (p && game.course && game.course.isCrates) {
+      // Crate Cove: same fixed-yaw wide tower shot, the whole grid of
+      // decks plus open sea in frame — screen-true free control
+      this.lerpCam(0, 16.5, -15.5, 0, 0.4, 0.5);
     } else if (p) {
       const pos = p.pos;
       this.lerpCam(
@@ -655,12 +922,43 @@ export class Renderer {
         pos.x * 0.45, pos.y - 0.2, pos.z + 4.5
       );
     }
+    // P2 camera: races follow P2; free modes (crates / arena) share P1's
+    // fixed tower shot so both halves see the whole field
+    if (this.twoPlayer && inRun && p2) {
+      if (game.mode === 'race') {
+        const q = p2.pos;
+        this.lerpCam2(q.x * 0.62, q.y + 2.5, q.z - 5.4,
+          q.x * 0.45, q.y - 0.2, q.z + 4.5);
+      } else {
+        this.cam2.position.copy(this.cam.position);
+        this.cam2.quaternion.copy(this.cam.quaternion);
+      }
+    }
     // sun follows the action so the shadow frustum stays local
     let sx = 0, sz = -14;
     if (p) { sx = p.pos.x; sz = p.pos.z; }
     else if (state === 'map') { sx = 3; sz = 0; }
     this.sun.position.set(sx + 8, 16, sz - 6);
     this.sun.target.position.set(sx, 0, sz);
+  }
+
+  // Fit the whole island chain on screen at ANY aspect: pull back until
+  // half the span fits inside the horizontal FOV (plus margin for island
+  // radius and flags). Walking dollies in and follows the hero; idling
+  // settles back to the full overview. Fixes islands running off-screen
+  // once the ladder grew to four nodes.
+  mapCam(focusX, overview) {
+    const span = (LEVELS.length - 1) * MAP_SPACING;
+    const half = span / 2 + 3.2;
+    const vfov = THREE.MathUtils.degToRad(this.cam.fov);
+    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.cam.aspect);
+    let d = half / Math.tan(hfov / 2);
+    d = Math.min(Math.max(d, 8), 30);
+    if (!overview) d *= 0.78;                 // travel: closer, intimate
+    const pitch = 0.33;
+    return {
+      x: focusX, y: 0.55 + Math.sin(pitch) * d, z: Math.cos(pitch) * d,
+    };
   }
 
   lerpCam(x, y, z, lx, ly, lz) {
@@ -671,8 +969,34 @@ export class Renderer {
     this.cam.lookAt(this.camLook);
   }
 
+  lerpCam2(x, y, z, lx, ly, lz) {
+    const k = 0.085;
+    this.cam2Pos.lerp(new THREE.Vector3(x, y, z), k);
+    this.cam2Look.lerp(new THREE.Vector3(lx, ly, lz), k);
+    this.cam2.position.copy(this.cam2Pos);
+    this.cam2.lookAt(this.cam2Look);
+  }
+
   render() {
-    this.r.render(this.scene, this.cam);
+    if (!this.twoPlayer) { this.r.render(this.scene, this.cam); return; }
+    // split screen: same scene, two viewports, one camera each. three.js
+    // viewport origin is bottom-left, so stacked = P1 on top (y = h/2).
+    const r = this.r, w = view.w, h = view.h;
+    r.setScissorTest(true);
+    const halves = this.splitMode === 'h'
+      ? [[0, h / 2, w, h / 2], [0, 0, w, h / 2]]
+      : [[0, 0, w / 2, h], [w / 2, 0, w / 2, h]];
+    const cams = [this.cam, this.cam2];
+    for (let i = 0; i < 2; i++) {
+      const [x, y, ww, hh] = halves[i];
+      cams[i].aspect = ww / hh;
+      cams[i].updateProjectionMatrix();
+      r.setViewport(x, y, ww, hh);
+      r.setScissor(x, y, ww, hh);
+      r.render(this.scene, cams[i]);
+    }
+    r.setScissorTest(false);
+    r.setViewport(0, 0, w, h);
   }
 
   resize() {
@@ -680,6 +1004,9 @@ export class Renderer {
     this.r.setSize(view.w, view.h, false);
     this.cam.aspect = view.w / view.h;
     this.cam.updateProjectionMatrix();
+    this.cam2.aspect = this.twoPlayer && this.splitMode === 'v'
+      ? (view.w / 2) / view.h : view.w / (view.h / 2);
+    this.cam2.updateProjectionMatrix();
   }
 }
 
