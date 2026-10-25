@@ -253,8 +253,9 @@ export class Player {
     // drives forward/back and both axes decelerate on their own. Steering
     // blends lateral speed; wind pushes regardless. Stun locks both.
     // Carrying a hero slows the carrier; a just-thrown hero keeps momentum
-    // (ballistic) until `throwT` runs out.
-    const mul = this.speedMul * (this.carry ? 0.78 : 1);
+    // (ballistic) until `throwT` runs out. Standing water (Sunset Alleys)
+    // slows everyone — a multiplier only, never a stun.
+    const mul = this.speedMul * (this.carry ? 0.78 : 1) * (flags.wet || 1);
     let targetVz, targetVx;
     if (this.free) {
       targetVz = stunned ? 0 : (flags.z || 0) * d.speed * 0.82 * mul;

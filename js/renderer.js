@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { view } from './view.js';
 import { buildHero, buildTrophy } from './models.js';
 import { CHARACTERS, HERO_RADIUS, HERO_HALF } from './hero.js';
-import { LEVELS, ARENA, CRATES, MAP_SPACING } from './levels.js';
+import { LEVELS, ARENA, CRATES, MAP_SPACING, wetAt } from './levels.js';
 
 // capsule center → feet, derived from the collider constants
 const FEET = HERO_HALF + HERO_RADIUS;
@@ -205,9 +205,14 @@ export class Renderer {
     const sand = mat(th.sand), rock = mat(th.rock), wood = mat(th.wood);
 
     for (const s of course.segs) {
-      const m = add(new THREE.Mesh(
-        new THREE.BoxGeometry(s.x1 - s.x0, 2, s.z1 - s.z0), sand),
-      (s.x0 + s.x1) / 2, s.top - 1, (s.z0 + s.z1) / 2);
+      const rot = s.rot !== undefined;
+      const m = new THREE.Mesh(
+        new THREE.BoxGeometry(rot ? s.w : (s.x1 - s.x0), 2,
+          rot ? s.len : (s.z1 - s.z0)), sand);
+      m.position.set(rot ? s.cx : (s.x0 + s.x1) / 2, s.top - 1,
+        rot ? s.cz : (s.z0 + s.z1) / 2);
+      if (rot) m.rotation.y = s.rot;
+      this.courseGroup.add(m);
       m.receiveShadow = true;
     }
     const sandDark = mat(th.sandDark);
@@ -321,9 +326,14 @@ export class Renderer {
 
     // blocking walls: canyon chicanes, portcullis frames, the Needle
     for (const w of course.walls) {
-      const m = add(new THREE.Mesh(
-        new THREE.BoxGeometry(w.x1 - w.x0, w.h, w.z1 - w.z0), rock),
-      (w.x0 + w.x1) / 2, w.top + w.h / 2, (w.z0 + w.z1) / 2);
+      const rot = w.rot !== undefined;
+      const m = new THREE.Mesh(
+        new THREE.BoxGeometry(rot ? 0.6 : (w.x1 - w.x0), w.h,
+          rot ? w.len : (w.z1 - w.z0)), rock);
+      m.position.set(rot ? w.cx : (w.x0 + w.x1) / 2, w.top + w.h / 2,
+        rot ? w.cz : (w.z0 + w.z1) / 2);
+      if (rot) m.rotation.y = w.rot;
+      this.courseGroup.add(m);
       m.castShadow = true;
       m.receiveShadow = true;
     }
@@ -725,8 +735,350 @@ export class Renderer {
           this.ambient.push({ kind: 'confetti', mesh: m, ph: i * 0.37,
             bx: (i % 7) * 1.4 - 4.2, bz: ((i / 7) | 0) * 1.6 - 0.8 });
         }
+      } else if (d.kind === 'awning') {
+        const side = Math.sign(d.x) || 1;
+        const m = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 2.4),
+          mat(d.color || 0xe04a3f));
+        m.position.set(d.x - side * 0.7, 2.9, d.z);
+        m.rotation.z = side * -0.22;
+        m.castShadow = true;
+        this.courseGroup.add(m);
+      } else if (d.kind === 'sign') {
+        const side = Math.sign(d.x) || 1;
+        const g = new THREE.Group();
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 0.05),
+          mat(0x3a3330));
+        arm.position.set(-side * 0.3, 3.3, 0);
+        const board = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.7, 0.9),
+          mat(0xffd23e));
+        board.position.set(-side * 0.62, 2.9, 0);
+        g.add(arm, board);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'lantern', mesh: g, ph: d.ph || 0 });
+      } else if (d.kind === 'lamp') {
+        const g = new THREE.Group();
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.09, 3.6, 8), mat(0x2f333a));
+        pole.position.y = 1.8;
+        const x = Math.sign(d.x) || 1;
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.07, 0.07),
+          mat(0x2f333a));
+        arm.position.set(-x * 0.3, 3.55, 0);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8),
+          new THREE.MeshLambertMaterial({ color: 0xfff2b0, emissive: 0xffb347 }));
+        head.position.set(-x * 0.6, 3.42, 0);
+        g.add(pole, arm, head);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'lampGlow', lamp: head, ph: d.ph || 0 });
+      } else if (d.kind === 'stall') {
+        const g = new THREE.Group();
+        const table = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.12, 1.4),
+          mat(0x8a5a33));
+        table.position.y = 0.9;
+        const canopy = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.08, 1.7),
+          mat(d.color || 0xe04a3f));
+        canopy.position.y = 2.2;
+        canopy.rotation.z = 0.08;
+        for (const sx of [-0.85, 0.85]) {
+          for (const sz of [-0.6, 0.6]) {
+            const leg = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.05, 0.06, 0.9, 6), mat(0x6a4526));
+            leg.position.set(sx, 0.45, sz);
+            g.add(leg);
+          }
+        }
+        g.add(table, canopy);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+      } else if (d.kind === 'arch') {
+        const g = new THREE.Group();
+        const w = d.w || 9.4, h = d.h || 4.4;
+        for (const s of [-1, 1]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, h, 0.4),
+            mat(0x6e5243));
+          post.position.set(s * (w / 2 - 0.4), h / 2, 0);
+          g.add(post);
+        }
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(w, 0.5, 0.5),
+          mat(0x7a5a48));
+        beam.position.y = h - 0.3;
+        g.add(beam);
+        g.position.set(d.x || 0, 0, d.z);
+        this.courseGroup.add(g);
+      } else if (d.kind === 'laundry') {
+        const g = new THREE.Group();
+        const w = d.w || 8;
+        const line = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.015, 0.015, w, 4), mat(0xd8d4c8));
+        line.rotation.z = Math.PI / 2;
+        line.position.y = 3.6;
+        g.add(line);
+        const cloths = [];
+        for (let i = 0; i < 4; i++) {
+          const cloth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.7, 0.03),
+            mat([0xf4f1e8, 0x8fd2e8, 0xffd23e, 0xff8fb1][i]));
+          cloth.position.set(-w / 2 + (i + 0.7) * (w / 4.6), 3.2, 0);
+          cloth.castShadow = true;
+          g.add(cloth);
+          cloths.push(cloth);
+        }
+        g.position.set(d.x || 0, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'laundry', mesh: g, ph: d.ph || 0, cloths });
+      } else if (d.kind === 'pigeon') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6),
+          mat(0x8a8fa0));
+        body.position.y = 0.12;
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6),
+          mat(0x6a6f80));
+        head.position.set(0, 0.24, 0.08);
+        g.add(body, head);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'pigeon', mesh: g, ph: d.ph || 0 });
       }
     }
+
+    // ---- Sunset Alleys street set --------------------------------------
+    // tall facades with lit window bands
+    for (const f of course.facades || []) {
+      const rot = f.rot !== undefined;
+      const w = rot ? f.w : (f.x1 - f.x0);
+      const d = rot ? f.len : (f.z1 - f.z0);
+      const h = f.h || 7;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d),
+        mat(w > 4 ? 0x6e5243 : 0x7a5f4a));
+      body.position.set(rot ? f.cx : (f.x0 + f.x1) / 2, h / 2,
+        rot ? f.cz : (f.z0 + f.z1) / 2);
+      if (rot) body.rotation.y = f.rot;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      this.courseGroup.add(body);
+      // lit window bands on the street-facing side
+      if (rot) {
+        const rx = Math.cos(f.rot), rz = -Math.sin(f.rot);
+        const side = -(f.side || 1);
+        const bx = f.cx + rx * side * 0.32;
+        const bz = f.cz + rz * side * 0.32;
+        const floors = Math.max(2, Math.min(3, Math.floor(h / 2.6)));
+        for (let r = 0; r < floors; r++) {
+          const band = new THREE.Mesh(
+            new THREE.BoxGeometry(0.05, 0.75, d * 0.86),
+            new THREE.MeshBasicMaterial(
+              { color: r % 2 ? 0xffd27a : 0xffb85a }));
+          band.position.set(bx, 2.6 + r * 2.2, bz);
+          band.rotation.y = f.rot;
+          this.courseGroup.add(band);
+        }
+        continue;
+      }
+      const side = (f.x0 + f.x1) / 2 < 0 ? 1 : -1;
+      const faceX = side > 0 ? f.x1 + 0.03 : f.x0 - 0.03;
+      const floors = Math.max(2, Math.min(3, Math.floor(h / 2.6)));
+      for (let r = 0; r < floors; r++) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.75, d * 0.86),
+          new THREE.MeshBasicMaterial({ color: r % 2 ? 0xffd27a : 0xffb85a }));
+        band.position.set(faceX, 2.6 + r * 2.2, (f.z0 + f.z1) / 2);
+        this.courseGroup.add(band);
+      }
+      if (d > 6) {
+        const balc = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.1, d * 0.4),
+          mat(0x4a3a30));
+        balc.position.set(faceX + side * 0.3, 3.6, (f.z0 + f.z1) / 2);
+        this.courseGroup.add(balc);
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, d * 0.4),
+          mat(0x3a2f26));
+        rail.position.set(faceX + side * 0.62, 3.9, (f.z0 + f.z1) / 2);
+        this.courseGroup.add(rail);
+      }
+    }
+    // bins (green street cans), cars (parked wrecks), fountains
+    for (const b of course.bins || []) {
+      const g = new THREE.Group();
+      const col = b.big ? 0x2f6a4a : 0x3f7a58;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), mat(col));
+      body.position.y = b.h / 2;
+      body.castShadow = true;
+      g.add(body);
+      if (b.big) {
+        const lid = new THREE.Mesh(
+          new THREE.BoxGeometry(b.w + 0.1, 0.1, b.d + 0.1), mat(0x24503a));
+        lid.position.y = b.h + 0.03;
+        g.add(lid);
+      } else {
+        const lid = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.31, 0.31, 0.08, 8), mat(0x24503a));
+        lid.position.y = b.h + 0.02;
+        g.add(lid);
+      }
+      g.position.set(b.x, 0, b.z);
+      this.courseGroup.add(g);
+    }
+    const CAR_COLS = [0x9c3b32, 0xd9a62e, 0x3f6a8a, 0x6a6a72, 0x8a5a33];
+    (course.cars || []).forEach((car, ci) => {
+      const g = new THREE.Group();
+      const van = car.h > 1.8;
+      const col = CAR_COLS[ci % CAR_COLS.length];
+      const bodyH = van ? car.h - 0.28 : 0.75;
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(car.w, bodyH, car.d), mat(col));
+      body.position.y = bodyH / 2 + 0.18;
+      body.castShadow = true;
+      g.add(body);
+      if (!van) {
+        const cab = new THREE.Mesh(
+          new THREE.BoxGeometry(car.w * 0.84, 0.52, car.d * 0.48),
+          mat(0x24323a));
+        cab.position.set(0, bodyH + 0.28, -car.d * 0.06);
+        g.add(cab);
+        const roof = new THREE.Mesh(
+          new THREE.BoxGeometry(car.w * 0.8, 0.1, car.d * 0.44), mat(col));
+        roof.position.set(0, bodyH + 0.56, -car.d * 0.06);
+        g.add(roof);
+      } else {
+        const windshield = new THREE.Mesh(
+          new THREE.BoxGeometry(car.w * 0.84, 0.5, 0.06), mat(0x24323a));
+        windshield.position.set(0, car.h - 0.55, car.d / 2 - 0.2);
+        g.add(windshield);
+      }
+      for (const wz of [-car.d * 0.3, car.d * 0.3]) {
+        for (const wx of [-car.w / 2, car.w / 2]) {
+          const wheel = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.32, 0.32, 0.2, 10), mat(0x1c1e24));
+          wheel.rotation.z = Math.PI / 2;
+          wheel.position.set(wx, 0.32, wz);
+          g.add(wheel);
+        }
+      }
+      for (const s of [-1, 1]) {
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.16, 0.06),
+          new THREE.MeshBasicMaterial({ color: 0xfff2b0 }));
+        head.position.set(s * car.w * 0.3, van ? 1.0 : 0.62, car.d / 2 + 0.02);
+        g.add(head);
+        const tail = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.14, 0.06),
+          new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
+        tail.position.set(s * car.w * 0.3, van ? 1.0 : 0.62, -car.d / 2 - 0.02);
+        g.add(tail);
+      }
+      g.position.set(car.x, 0, car.z);
+      g.rotation.y = car.rot || 0;
+      this.courseGroup.add(g);
+    });
+    for (const f of course.fountains || []) {
+      const g = new THREE.Group();
+      const basin = new THREE.Mesh(
+        new THREE.CylinderGeometry(f.r, f.r + 0.15, 0.6, 18), mat(0xb8a98a));
+      basin.position.y = 0.3;
+      basin.receiveShadow = true;
+      const water = new THREE.Mesh(
+        new THREE.CylinderGeometry(f.r - 0.2, f.r - 0.2, 0.08, 18),
+        new THREE.MeshLambertMaterial(
+          { color: 0x5ab8e0, transparent: true, opacity: 0.85 }));
+      water.position.y = 0.62;
+      const jet = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.14, 1.2, 8),
+        new THREE.MeshLambertMaterial(
+          { color: 0xcfeeff, transparent: true, opacity: 0.6 }));
+      jet.position.y = 1.2;
+      g.add(basin, water, jet);
+      g.position.set(f.x, 0, f.z);
+      this.courseGroup.add(g);
+      this.ambient.push({ kind: 'fountainJet', mesh: jet, ph: f.z });
+    }
+    // standing water: a dark glossy sheet, a sliding light sheen and
+    // expanding ripple rings — plus the splash ring used on entry
+    for (const w of course.wets || []) {
+      const cx = (w.x0 + w.x1) / 2, cz = (w.z0 + w.z1) / 2;
+      const ww = w.x1 - w.x0, wd = w.z1 - w.z0;
+      const base = new THREE.Mesh(
+        new THREE.PlaneGeometry(ww, wd),
+        new THREE.MeshPhongMaterial({
+          color: 0x123a4e, specular: 0xbfe9ff, shininess: 110,
+          transparent: true, opacity: 0.86,
+        }));
+      base.rotation.x = -Math.PI / 2;
+      base.position.set(cx, 0.035, cz);
+      base.receiveShadow = true;
+      this.courseGroup.add(base);
+      const sheen = new THREE.Mesh(
+        new THREE.PlaneGeometry(ww * 0.45, wd),
+        new THREE.MeshBasicMaterial({
+          color: 0xa8e0ff, transparent: true, opacity: 0.1,
+        }));
+      sheen.rotation.x = -Math.PI / 2;
+      sheen.position.set(cx, 0.048, cz);
+      this.courseGroup.add(sheen);
+      this.ambient.push({ kind: 'sheen', mesh: sheen, bx: cx,
+        half: ww * 0.26, ph: w.z0 });
+      for (let i = 0; i < 3; i++) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.5, 0.045, 6, 18),
+          new THREE.MeshBasicMaterial({
+            color: 0xd8f2ff, transparent: true, opacity: 0,
+          }));
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(cx + (i - 1) * ww * 0.22, 0.05,
+          cz + (i % 2 ? 1 : -1) * wd * 0.18);
+        ring.visible = false;
+        this.courseGroup.add(ring);
+        this.ambient.push({ kind: 'rippleRing', mesh: ring, ph: i * 0.9 });
+      }
+    }
+    this.wetRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.45, 0.07, 6, 18),
+      new THREE.MeshBasicMaterial({
+        color: 0xe6f7ff, transparent: true, opacity: 0,
+      }));
+    this.wetRing.rotation.x = Math.PI / 2;
+    this.wetRing.visible = false;
+    this.courseGroup.add(this.wetRing);
+    this.wetT = -1;
+    this.wetWas = false;
+    // critters (dogs and cats darting across the alley)
+    this.critterMeshes = (course.critters || []).map((k) => {
+      const dog = k.kind === 'dog';
+      const g = new THREE.Group();
+      const col = dog ? 0x8a5a33 : 0x4a4a52;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(
+        dog ? 0.42 : 0.3, dog ? 0.28 : 0.22, dog ? 0.8 : 0.55), mat(col));
+      body.position.y = dog ? 0.42 : 0.3;
+      body.castShadow = true;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(
+        dog ? 0.26 : 0.22, dog ? 0.24 : 0.2, 0.24), mat(col));
+      head.position.set(0, dog ? 0.58 : 0.44, dog ? 0.44 : 0.32);
+      const snout = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.1, 0.14),
+        mat(0xd8b890));
+      snout.position.set(0, dog ? 0.52 : 0.38, dog ? 0.58 : 0.44);
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(
+        0.06, 0.06, dog ? 0.4 : 0.5), mat(col));
+      tail.position.set(0, dog ? 0.5 : 0.36, dog ? -0.5 : -0.34);
+      tail.rotation.x = dog ? -0.6 : -1.0;
+      const legs = [];
+      for (const sz of [-0.25, 0.25]) {
+        for (const sx of [-(dog ? 0.14 : 0.1), (dog ? 0.14 : 0.1)]) {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(
+            0.07, dog ? 0.3 : 0.2, 0.07), mat(col));
+          leg.position.set(sx, dog ? 0.15 : 0.1, sz);
+          g.add(leg);
+          legs.push(leg);
+        }
+      }
+      if (!dog) {
+        for (const s of [-1, 1]) {
+          const ear = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 4),
+            mat(col));
+          ear.position.set(s * 0.07, 0.58, 0.32);
+          g.add(ear);
+        }
+      }
+      g.add(body, head, snout, tail);
+      g.position.set(0, 0, k.z);
+      this.courseGroup.add(g);
+      return { k, g, legs, tail };
+    });
   }
 
   // ---- hero mesh ---------------------------------------------------------
@@ -993,7 +1345,56 @@ export class Renderer {
             a.mesh.rotation.z = t * 3 + a.ph;
             break;
           }
+          case 'fountainJet':
+            a.mesh.scale.y = 0.8 + Math.sin(t * 5 + a.ph) * 0.2;
+            a.mesh.material.opacity = 0.45 + Math.sin(t * 7 + a.ph) * 0.12;
+            break;
+          case 'ripple':
+            a.mesh.material.opacity = 0.5 + Math.sin(t * 2 + a.ph) * 0.07;
+            break;
+          case 'lampGlow':
+            a.lamp.material.emissiveIntensity =
+              0.8 + Math.max(0, Math.sin(t * 2.2 + a.ph)) * 0.5;
+            break;
+          case 'pigeon': {
+            const peck = Math.max(0, Math.sin(t * (2.2 + (a.ph % 1)) + a.ph));
+            a.mesh.rotation.x = peck * 0.5;
+            a.mesh.position.y = Math.abs(Math.sin(t * 1.7 + a.ph)) * 0.03;
+            break;
+          }
+          case 'laundry': {
+            a.mesh.rotation.z = Math.sin(t * 1.7 + a.ph) * 0.04;
+            for (let i = 0; i < (a.cloths || []).length; i++) {
+              a.cloths[i].rotation.z = Math.sin(t * 2 + a.ph + i) * 0.12;
+            }
+            break;
+          }
+          case 'sheen':
+            a.mesh.position.x = a.bx + Math.sin(t * 0.7 + a.ph) * a.half;
+            a.mesh.material.opacity =
+              0.08 + Math.max(0, Math.sin(t * 1.3 + a.ph)) * 0.09;
+            break;
+          case 'rippleRing': {
+            const cyc = (t * 0.5 + a.ph) % 1;
+            a.mesh.visible = cyc > 0.05;
+            const s = 0.5 + cyc * 1.7;
+            a.mesh.scale.set(s, s, s);
+            a.mesh.material.opacity = 0.45 * (1 - cyc);
+            break;
+          }
         }
+      }
+      // critters dart across the alley; legs and tail keep the run readable
+      for (const cm of this.critterMeshes || []) {
+        const k = cm.k;
+        cm.g.visible = k.active !== false;
+        cm.g.position.x = k.bx;
+        cm.g.rotation.y = k.vel >= 0 ? Math.PI / 2 : -Math.PI / 2;
+        const stride = Math.sin(t * 14 + k.phase) * 0.55;
+        cm.legs.forEach((leg, i) => {
+          leg.rotation.x = i % 2 ? stride : -stride;
+        });
+        cm.tail.rotation.y = Math.sin(t * 5 + k.phase) * 0.4;
       }
       for (const hm of this.pendulumMeshes) {
         const tr = hm.p.body.translation();
@@ -1055,6 +1456,23 @@ export class Renderer {
       }
       poseAct(p, this.heroParts);
       if (p.throwT > 0) hp.rotation.x = (1 - p.throwT / 40) * Math.PI * 2;
+    }
+    // splash ring the moment a hero steps into standing water
+    if (this.wetRing) {
+      const wetNow = (p && game.course && game.course.wets
+        && game.course.wets.length) ? wetAt(game.course, p.pos) : 1;
+      if (wetNow < 1 && !this.wetWas) { this.wetT = t; this.wetWas = true; }
+      else if (wetNow >= 1) this.wetWas = false;
+      const e = this.wetT >= 0 ? t - this.wetT : 99;
+      if (e < 0.5 && p) {
+        this.wetRing.visible = true;
+        this.wetRing.position.set(p.pos.x, 0.07, p.pos.z);
+        const s = 0.6 + e * 4;
+        this.wetRing.scale.set(s, s, 1);
+        this.wetRing.material.opacity = 0.7 * (1 - e / 0.5);
+      } else {
+        this.wetRing.visible = false;
+      }
     }
 
     // P2 rig (split screen) — same posing rules, own hero
@@ -1202,8 +1620,11 @@ export class Renderer {
       this.lerpCam(0, 16.5, -15.5, 0, 0.4, 0.5);
     } else if (p) {
       const pos = p.pos;
+      // Sunset Alleys: pull back and rise a little so the tall facades read
+      const alley = !!(game.course && game.course.alleys);
+      const back = alley ? 6.7 : 5.4;
       this.lerpCam(
-        pos.x * 0.62, pos.y + 2.5, pos.z - 5.4,
+        pos.x * 0.62, pos.y + (alley ? 3.3 : 2.5), pos.z - back,
         pos.x * 0.45, pos.y - 0.2, pos.z + 4.5
       );
     }

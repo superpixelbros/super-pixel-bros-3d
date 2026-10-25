@@ -7,7 +7,7 @@
 // recorded flag streams could replay a race later.
 
 import { Player, CHARACTERS } from './hero.js';
-import { windAt, hazardTouch, CRATES } from './levels.js';
+import { windAt, hazardTouch, CRATES, wetAt } from './levels.js';
 
 // Rival speed is a RATIO of the player's chosen hero (plus their own jump
 // copy) — every race is close no matter who you pick; personality comes
@@ -67,22 +67,28 @@ export class Rival {
 
     // zone jumps with a per-rival timing offset so they don't move in sync.
     // Edge-only (hold === 0): the hero jump latch needs a release to re-arm.
+    // The jitter may only ADD trigger chances — checking the raw z too keeps
+    // a slow rival from being nudged out of a zone it is standing in (that
+    // parked komo against a bin forever).
     const zj = q.z + Math.sin(this.seed * 3) * 0.25;
-    const jump = this.hold === 0 && p.grounded &&
-      course.jumpZones.some(([a, b]) => zj > a && zj < b);
+    let jump = this.hold === 0 && p.grounded &&
+      course.jumpZones.some(([a, b]) =>
+        (zj > a && zj < b) || (q.z > a && q.z < b));
     if (jump) this.hold = 32;
 
-    // stuck behind the hero or another rival? vault or shove sideways
+    // stuck behind the hero, a rival or street furniture? vault it for real
     if (p.grounded && p.speed2D < p.def.speed * 0.4) {
       if (++this.blockT > 12) {
         this.blockT = 0;
         this.hold = 32;
+        if (p.grounded) jump = true;   // holding the button alone never jumps
         x = q.x >= 0 ? -1 : 1;
       }
     } else this.blockT = 0;
 
     p.step({ x, jump, jumpHeld: this.hold > 0, spin: false,
-      windX: live ? windAt(course, q) : 0 });
+      windX: live ? windAt(course, q) : 0,
+      wet: wetAt(course, q) });
     if (this.hold > 0) this.hold--;
     // hazards knock rivals too (hp 99 → they stumble but never die): chaos
     if (live) {

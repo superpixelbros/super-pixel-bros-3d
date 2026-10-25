@@ -425,15 +425,15 @@ console.log('damage + hazards');
   ok(cr.gone, 'crumble drops after standing on it');
   wg.disposeWorld();
 
-  // live ridge crumble: stand on it → it gives way → real fall → cp respawn
-  const cg = mkGame('hero', 1);
+  // live crumble (Daybreak's crossing): stand on it → gives way → fall → cp
+  const cg = mkGame('hero', 0);
   cg.player.autoRun = false;
   cg.player.body.setTranslation({ x: 0, y: 1.2, z: 67.2 }, true);
   const slab = cg.course.crumbles[0];
   for (let i = 0; i < 240 && !slab.removed; i++) {
     cg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
   }
-  ok(slab.gone && slab.removed, 'ridge crumble slab removed from physics');
+  ok(slab.gone && slab.removed, 'crumble slab removed from physics');
   for (let i = 0; i < 240 && cg.deaths === 0; i++) {
     cg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
   }
@@ -518,12 +518,59 @@ console.log('stage lengths');
   const b = mkGame('hero', 1);
   ok(b.course.finishZ >= 1.9 * a.course.finishZ,
     `stage 2 (${b.course.finishZ}m) ≥ 1.9× stage 1 (${a.course.finishZ}m)`);
-  ok(b.course.crumbles.length >= 4 && b.course.gates.length === 3
-    && b.course.hammers.length >= 4 && b.course.pendulums.length >= 5,
-    `stage 2 carries the new gauntlet (crumbles=${b.course.crumbles.length}` +
-    ` gates=${b.course.gates.length} hammers=${b.course.hammers.length}` +
-    ` pendulums=${b.course.pendulums.length})`);
+  ok(b.course.alleys && b.course.bins.length >= 4 && b.course.cars.length >= 4
+    && b.course.fountains.length >= 1 && b.course.wets.length >= 4
+    && b.course.critters.length >= 3 && b.course.facades.length >= 10,
+    `sunset alleys carries the street set (bins=${b.course.bins.length}` +
+    ` cars=${b.course.cars.length} wets=${b.course.wets.length}` +
+    ` critters=${b.course.critters.length} facades=${b.course.facades.length})`);
+  ok(a.course.bins.length === 0 && a.course.critters.length === 0,
+    'stage 1 stays the pure ridge (no street set)');
   a.disposeWorld(); b.disposeWorld();
+}
+
+// ---- 6d) Sunset Alleys street rules --------------------------------------
+console.log('sunset alleys');
+{
+  // standing water is a speed multiplier, never a stun or damage
+  const wg = mkGame('hero', 1);
+  wg.hazardsOff = true;
+  const run = (z, x) => {
+    wg.player.body.setTranslation({ x, y: 1.6, z }, true);
+    wg.player.vz = 0;
+    const z0 = wg.player.pos.z;
+    for (let i = 0; i < 30; i++) {
+      wg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+    }
+    return wg.player.pos.z - z0;
+  };
+  const dry = run(24, 3.6);
+  const wet = run(28.6, 3.6);
+  ok(wet < dry * 0.82,
+    `water slows the runner (${wet.toFixed(1)}m vs ${dry.toFixed(1)}m in 1s)`);
+  ok(wg.player.stun === 0, 'water never stuns');
+  wg.disposeWorld();
+
+  // a darting dog is a real knockback hazard
+  const dg = mkGame('hero', 1);
+  dg.player.autoRun = false;
+  dg.player.body.setTranslation({ x: 0, y: 1.2, z: 90 }, true);
+  for (let i = 0; i < 320 && dg.player.hp === dg.player.maxHp; i++) {
+    dg.step({ x: 0, jump: false, jumpHeld: false, spin: false });
+  }
+  ok(dg.player.hp < dg.player.maxHp,
+    'a darting dog knocks a hero standing in its path');
+  dg.disposeWorld();
+
+  // small bins are jumpable; dumpsters and wrecks are lane blockers
+  const lg = mkGame('hero', 1);
+  const smalls = lg.course.bins.filter((b) => !b.big);
+  const bigs = lg.course.bins.filter((b) => b.big);
+  ok(smalls.length >= 2 && smalls.every((b) => b.h <= 0.95),
+    'small bins are low enough to jump');
+  ok(bigs.length >= 1 && lg.course.cars.length >= 3,
+    'dumpsters and wrecks are lane blockers');
+  lg.disposeWorld();
 }
 
 // ---- 7) AI rivals race along ----------------------------------------------
@@ -574,9 +621,9 @@ console.log('rivals');
     `hero placement recorded: ${rg.clearPlace}`);
   rg.disposeWorld();
 
-  // THE GAUNTLET STRESS: on Ridge v2 the rivals must thread the canyon
-  // gates, QUEUE at the portcullis and single-file the Needle — live
-  // hazards, no bot mercy — and still all come out the far side
+  // THE GAUNTLET STRESS: in Sunset Alleys the rivals must weave the fork,
+  // thread the archway and dodge the wrecks — live hazards, no bot mercy —
+  // and still all come out the far side
   const rg2 = mkGame('hero', 1);
   const zones2 = rg2.course.jumpZones, narrows2 = rg2.course.narrows;
   let hold2 = 0;
@@ -604,11 +651,11 @@ console.log('rivals');
   }
   for (const r of rg2.rivals) {
     ok(r.pos.z > 40 || r.finished,
-      `ridge rival ${r.id} passed the canyon (z=${r.pos.z.toFixed(1)}` +
+      `alleys rival ${r.id} ran the street (z=${r.pos.z.toFixed(1)}` +
       (r.finished ? ', finished)' : ')'));
   }
   ok(rg2.rivals.some((r) => r.finished),
-    'a rival can WIN Sunset Ridge fair and square (gates uncorked)');
+    'a rival can run Sunset Alleys fair and square (hazards live)');
   rg2.disposeWorld();
 }
 

@@ -1,7 +1,7 @@
 # Paxala · بَكْسَلَة
 
 A Crash-Bandicoot-style 3D platformer with Stumble-Guys chaos — auto-run
-through a gauntlet of canyon gates and swinging hazards, race the AI field,
+through canyon gates and the living Sunset Alleys, race the AI field,
 survive the Crate Cove and the Bumper Arena, win the trophy. Playable solo
 or **two-player split screen** on one screen.
 

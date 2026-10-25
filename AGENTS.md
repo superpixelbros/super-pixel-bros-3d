@@ -68,7 +68,9 @@ out-of-ring or hearts-drained → over, 60s → win), the **Crate Cove**
 sumo ring), **playtest regressions** (one press = one jump; hammer damage
 covers the visible bar only, no phantom hits past the tip or above it),
 the **two-player** contract (5-runner field, both finishers, AI-relative
-places, per-player coins, crates both-dry, co-op arena win + splash) and
+places, per-player coins, crates both-dry, co-op arena win + splash),
+**Sunset Alleys street rules** (water slows but never stuns, a darting dog
+knocks, small bins are jumpable, wrecks/big bins are lane blockers) and
 the adventure-map + trophy logic (clearing a stage walks to the next node —
 Ridge → Crate Cove → arena; a saved frontier never hops past the next node;
 the trophy needs the arena win PLUS the whole ladder, via `claimVictory`),
@@ -82,7 +84,7 @@ Run it after ANY edit to `levels.js`, `hero.js`, `game.js` or `rivals.js`.
 | `js/main.js` | boot, state routing (`title/select/map/play/pause/clear/dq/lost/over/win/victory`), fixed 60 Hz loop, key routing (free modes — arena + crates — use Space-only jump and the throttle axis; races hop on Space/W/↑), **2P**: PLAYERS/SPLIT title options + persistence, automatic device pairing (`assignSlots`, re-run every play frame so pads bind/unbind live), per-player flag arrays into `game.step`, pad-direct hero select (slot edges + `stepHeroGrid` ↑/↓), second hero-select pass, split HUD + dual result lines; per-mode HUD (race / survival / crates); progress + arena-best persistence, resize, SW registration (never on localhost) |
 | `js/game.js` | the run + adventure flow: owns Rapier `World`, course, player, rivals; map cursor/walk logic (gated stages + the always-open arena node); coin/checkpoint/respawn/finish/placement rules; time-limit DQ (`state === 'dq'`, tick sfx) and placement gates (`passPlace` → `state === 'lost'`); applies hazards/wind/bounce to the hero (and crumble removal), collects speed pickups for every runner (boosts/curses, `pickupsOff` flag); **survival mode** (`stepSurvival`: `arenaStep` waves, shrinking ring, hits cost a heart off a flat 4-pool + knockback, `over`/`win` endings); **crates mode** (`stepCrates`: `crateStep` sink plan, seawater at `CRATES.drown` = `over`, every rival out = `win`, no buzzer — the last deck shrinks until one runner is dry); **punch/carry/throw** (`actorAction`: throw → grab → punch; `nearestActor`, `releaseHeld`) wired into crates + arena; `claimVictory()` = the trophy gate (arena win + `allRacesCleared()`); `hazardsOff`/`gatesOff` flags for geometry-only bots; `sfx()` no-op hook injected by main. **No DOM, no three** |
 | `js/hero.js` | `CHARACTERS` stat table + `Player`: kinematic capsule + Rapier character controller, auto-run, coyote/buffer/jump-cut, spin, `jumped`/`landed` event flags, damage model (`hurt()` → hearts, `stun` lockout, knockback, 1.2s invuln, `dead` at 0; `respawn()` = full heal + 0.5s grace; falls are always instant deaths). **One jump per press**: `jumpLatch` blocks re-jumps until the key is released (immune to auto-repeat/pad jitter), the buffer still catches a press just before landing. **`free = true` switches to two-axis control** (flags.z drives forward/back, friction brakes both axes — the survival arena and crate cove; race paths never set it). `speed`/`jump`/`hp`/`steer`/`airCtrl`/`floaty` define each hero; speed-pickup modifiers via `applyMod(±1)` (`mod`/`modT`/`modGot`, ground-only `speedMul`). `HERO_RADIUS`/`HERO_HALF` are the size source of truth. `stepHeroGrid(cur, dx, dy, cols, len)` is the select-grid cursor rule (rows step by the LIVE column count, bounds-clamped; horizontal wraps) — pure and headless-tested. **Punch / carry / throw**: `grab(target)` (target rides overhead), `struggle()` (6 mashed presses → `breakFree()`), `throwCarried()` (forward + up, ballistic `throwT`), `shove()` (stagger, no hearts); carried heroes are positioned by their carrier and can't steer. **No three** |
-| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme, timeLimit, passPlace, mode?}]` + shared kit: ground/step/coin/**decor** (solid trunks & rocks, always ≥1m off-lane)/**wall** (real blocking collider — chicanes, gate frames); hazards: hammer (physical turnstile, `len` scales reach), pendulum/roller/piston (**knockback sensors — no collider**; rollers sweep x or z via `ax`), gates (**portcullis**: kinematic collider that slams/lifts on a cycle), crumble (fixed slab removed on give-way), bounce pad + wind zones (pure zones); `courseStep()` animates everything — called with `hero = null` (Game's `hazardsOff`) it PARKS all moving hazard bodies at y −40 — `hazardTouch()` returns a knock vector, `windAt()` lateral push. Speed pickups are plain data on the course: `boosts`/`curses` `[{x, y, z, taken}]`. Stage 1 **Daybreak Ridge** (the proven v2 gauntlet under a bright `THEME_DAY` sky: **canyon weave** of alternating walls, **portcullis** queue-gate, **the Needle** single-file throat + double pendulum, piston, crosswind ledge, crumble crossing, pillars; top-3 gate) → Stage 2 **Sunset Ridge v3**, DOUBLE-length (~200m): the shared first half via `ridgeFirstHalf()` (z 0–100, identical to Daybreak), then hammer alley, a 3-slab **crumble crossing** over the void, a four-wall **canyon weave II** (2.8m gates + roller sweep), a **TWIN counter-phase portcullis** queue, a direction-flipping crosswind ledge and **Needle v2 + triple pendulum**; must win) → Stage 3 **Crate Cove** (`mode:'crates'`: 12 kinematic decks on a 4×3 grid over open sea, 1.5m water gaps, `CRATES` constants, `crateStep()` — idle bob → wobble telegraph → sink on a shuffled escalating plan; the last deck holds, then SHRINKS into a sumo ring; seawater = out, no hearts, no clock) → Stage 4 **Bumper Arena** (`mode:'survival'`: disc floor, `ARENA` constants, `arenaStep()` with wave-gated hazards + ramping tempo + own phase accumulators). Ambient life per stage (`decor` kinds beyond solid palm/rock): fern/flower sway, butterflies, drifting clouds, gulls, fireflies, tumbleweeds, vultures, swinging lanterns, cacti, fish arcs, deck crabs, whale spouts, arena banners/balloons/spotlights/confetti — animated by one `ambient` pass in the renderer, no colliders. `hazardTouch()` is Y-GATED — damage only lands when the hero overlaps the VISIBLE volume (jump the hammer bar / roller log; the piston stays too tall to clear). **Sunny Shore is DORMANT** — `buildShore`/`THEME_SHORE` stay wired and exported but off `LEVELS` (a future relax mode). **No three** |
+| `js/levels.js` | level registry `LEVELS = [{id, nameKey, build, theme, timeLimit, passPlace, mode?}]` + shared kit: ground/step/coin/**decor** (solid trunks & rocks, always ≥1m off-lane)/**wall** (real blocking collider — chicanes, gate frames); hazards: hammer (physical turnstile, `len` scales reach), pendulum/roller/piston (**knockback sensors — no collider**; rollers sweep x or z via `ax`), gates (**portcullis**: kinematic collider that slams/lifts on a cycle), crumble (fixed slab removed on give-way), bounce pad + wind zones (pure zones); `courseStep()` animates everything — called with `hero = null` (Game's `hazardsOff`) it PARKS all moving hazard bodies at y −40 — `hazardTouch()` returns a knock vector, `windAt()` lateral push. Speed pickups are plain data on the course: `boosts`/`curses` `[{x, y, z, taken}]`. Stage 1 **Daybreak Ridge** (the proven v2 gauntlet under a bright `THEME_DAY` sky: **canyon weave** of alternating walls, **portcullis** queue-gate, **the Needle** single-file throat + double pendulum, piston, crosswind ledge, crumble crossing, pillars; top-3 gate) → Stage 2 **Sunset Alleys** (`alleys: true`, ~210m, must win): a Temple-Run-style alley district — tall lit facades, **diagonal road bends** (`kit.bend`: rotated slab + walls + stepped lane narrows) that force the player left/right, fork alleys around whole buildings, a market square with a fountain, a two-step raised gallery, a parking alley of solid wrecks, **water slow zones**, cats and dogs darting across, then a single-file archway to the flag. Street kit: `makeBin` (small = jumpable, big = lane blocker), `makeCar` (solid, `rot`-able), `makeFountain`, `makePuddle`/`wetAt` (speed multiplier only), `makeCritter`; every blocker carries a `narrow` lead and small bins live in `jumpZones`; `ground()` centres its collider on the real x span (asymmetric streets need it)) → Stage 3 **Crate Cove** (`mode:'crates'`: 12 kinematic decks on a 4×3 grid over open sea, 1.5m water gaps, `CRATES` constants, `crateStep()` — idle bob → wobble telegraph → sink on a shuffled escalating plan; the last deck holds, then SHRINKS into a sumo ring; seawater = out, no hearts, no clock) → Stage 4 **Bumper Arena** (`mode:'survival'`: disc floor, `ARENA` constants, `arenaStep()` with wave-gated hazards + ramping tempo + own phase accumulators). Ambient life per stage (`decor` kinds beyond solid palm/rock): fern/flower sway, butterflies, drifting clouds, gulls, fireflies, tumbleweeds, vultures, swinging lanterns, cacti, fish arcs, deck crabs, whale spouts, arena banners/balloons/spotlights/confetti — animated by one `ambient` pass in the renderer, no colliders. `hazardTouch()` is Y-GATED — damage only lands when the hero overlaps the VISIBLE volume (jump the hammer bar / roller log; the piston stays too tall to clear). **Sunny Shore is DORMANT** — `buildShore`/`THEME_SHORE` stay wired and exported but off `LEVELS` (a future relax mode). **No three** |
 | `js/rivals.js` | 3 autopiloted `Player` instances (speed = chosen hero's speed × {1.10, 0.98, 0.87} + their own jump copy, lanes, jitter, vault-if-blocked, checkpoint respawn); `placement()` for the HUD. **Crate Cove**: `crateHop()` — a pure, deterministic deck-hopper (adjacent-deck hops only, commits mid-air, drifts toward the longest-lived deck) used by `Rival.stepCrates()` and by the headless cove bot. **They fight back**: while carrying they hold for ~100 frames then throw; off cooldown they grab a neighbour within 1m; while carried they mash to escape. Solid kinematic capsules — shoving works; they eat hazard knockback too (hp 99 = stumble, never die). Netcode seam: inputs → determinate sim. **No three** |
 | `js/audio.js` | WebAudio synth: SFX (jump/land/spin/coin/checkpoint/fall/clear/trophy/menu/hit/die/bounce/tick/gameover/boost/jinx) + one original chiptune loop per stage, ducked on pause; `pixelbros3d_mute`; unlock on first gesture |
 | `js/phys.js` | Rapier init + world factory; `STEP = 1/60` |
@@ -302,6 +304,29 @@ pad getter injectable).
   can splash a rider into the sea or out of the closing ring. Rivals
   fight back: they grab neighbours off cooldown, hurl after ~100 frames,
   and mash out when carried. `respawn()` clears every carry link.
+- **Sunset Alleys (stage 2, `alleys: true`)**: a Temple-Run-style street.
+  Real walls at ±4.5-5.1 with facades above; **forks** split around whole
+  building islands (a collider + one `narrow` per open lane); solid street
+  furniture: small bins (h <= 0.9 -> `jumpZones`) and big bins/cars (lane
+  blockers, always with a `narrow`). Lane-switch leads matter: a full-width
+  switch needs ~3.5m of `narrow` lead, or rivals stall on a bumper.
+  **Diagonal bends** (`kit.bend(z0, z1, cx0, cx1)`): the road itself slides
+  sideways — auto-run stays +Z, so the player must steer with it. A bend is
+  a rotated ground collider + rotated X-offset walls/facades + a chain of
+  stepped `narrows` (the bot/rival lane target) + fixed **end caps** at
+  both mouths, and every offset straight it feeds needs its own lane
+  `narrow` or runners drift to x=0 and fall. `ground()` centres its
+  collider on the *actual* x range (a fixed x=0 centre silently shifted
+  every asymmetric street — a real fall-through bug this project ate).
+  **Cars** (`makeCar`, `rot` supported) are solid lane blockers — colour
+  palette, headlights/taillights, a van and an angled barricade — each with
+  a `narrow` lead. **Water** (`course.wets` + `wetAt`) is a 0.55x speed
+  multiplier for every runner (heroes, rivals, bots) — never a stun or a
+  fall, so it can never soft-lock, but it does count toward clear-time
+  bands; the renderer draws a glossy `MeshPhong` sheet with a sliding sheen,
+  ripple rings and an entry splash ring. **Critters** (`makeCritter`
+  dogs/cats) sweep across the street as knockback sensors on a phase cycle,
+  parked by `hazardsOff`. The follow camera pulls back/up.
 - **Two-player (local split screen)**: PLAYERS 1/2 on the title — 2P is
   gated on at least one CONNECTED controller (browsers cannot tell two
   keyboards apart, so there is no keyboard-only 2P). The title re-reads
@@ -474,12 +499,18 @@ pad getter injectable).
     fish/crabs/spouts, arena banners/balloons/spotlights/confetti); and the
     two free modes got **punch · carry · throw** with mash-to-escape and
     AI rivals that grab, hurl and struggle back.
-13. Badges/relics: time trial tiers + all-coins challenge, shown on the
+13. **Sunset Alleys wave** ✅: stage 2 rebuilt as a Temple-Run-style alley
+    district — tall lit facades, fork alleys around buildings, a fountain
+    market square, a raised gallery, a parking alley of wrecks, water slow
+    zones, darting cats/dogs, and a single-file archway finish; new street
+    kit (bins/cars/fountains/puddles/critters) with bot contracts and
+    headless coverage.
+14. Badges/relics: time trial tiers + all-coins challenge, shown on the
     clear screen; best times via localStorage.
-14. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
+15. Polish: particles, screen shake, death/hurt juice, PWA icons (extend
    `gen-icons.mjs` pattern), GitHub Pages deploy for the new
    `superpixelbros/super-pixel-bros-3d` repo (enabled — pending).
-15. More levels (`LEVELS` entries + diorama nodes grow automatically) —
+16. More levels (`LEVELS` entries + diorama nodes grow automatically) —
     stage 5 sketch: "Storm Foundry" (pistons + conveyors + boulder chase).
 
 ## Ideas that fit

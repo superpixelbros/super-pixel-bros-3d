@@ -17,7 +17,7 @@ function kit(R, world, c) {
   const ground = (z0, z1, top = 0, x0 = -4.5, x1 = 4.5, shoulder = 4.5) => {
     const sx0 = x0 - shoulder, sx1 = x1 + shoulder;
     const b = world.createRigidBody(R.RigidBodyDesc.fixed()
-      .setTranslation(0, top - GROUND_HALF, (z0 + z1) / 2));
+      .setTranslation((sx0 + sx1) / 2, top - GROUND_HALF, (z0 + z1) / 2));
     world.createCollider(R.ColliderDesc.cuboid((sx1 - sx0) / 2, GROUND_HALF,
       (z1 - z0) / 2), b);
     c.segs.push({ x0, x1, z0, z1, top });
@@ -58,7 +58,62 @@ function kit(R, world, c) {
       (z1 - z0) / 2), b);
     c.walls.push({ x0, x1, z0, z1, h, top });
   };
-  return { ground, step, coinRow, decor, wall };
+  // A DIAGONAL street stretch: the road slides sideways between (z0, cx0)
+  // and (z1, cx1). Rotated ground slab, rotated walls + facades on both
+  // edges, and a chain of stepped narrows so the bot/rival autopilots track
+  // the moving lane. Auto-run stays +Z — the player must steer with it.
+  const bend = (z0, z1, cx0, cx1, o = {}) => {
+    const half = o.half ?? 4.5, top = o.top ?? 0;
+    const dz = z1 - z0, dx = cx1 - cx0;
+    const len = Math.hypot(dz, dx) + 1.2;    // overlap neighbours, no cracks
+    const ang = Math.atan2(dx, dz);
+    const cx = (cx0 + cx1) / 2, cz = (z0 + z1) / 2;
+    const q = { x: 0, y: Math.sin(ang / 2), z: 0, w: Math.cos(ang / 2) };
+    const b = world.createRigidBody(R.RigidBodyDesc.fixed()
+      .setTranslation(cx, top - GROUND_HALF, cz).setRotation(q));
+    world.createCollider(
+      R.ColliderDesc.cuboid(half, GROUND_HALF, len / 2), b);
+    c.segs.push({ rot: ang, cx, cz, w: half * 2, len, top,
+      x0: cx - half, x1: cx + half, z0, z1 });
+    const rx = Math.cos(ang), rz = -Math.sin(ang);
+    const fh = o.h ?? 8;
+    for (const s of [-1, 1]) {
+      // X-only offset: the wall must run from (cx0±w, z0) to (cx1±w, z1)
+      // so it meets the neighbouring straight's wall flush. A perpendicular
+      // offset shifts the wall in Z and leaves the corridor ends open.
+      const wx = cx + s * (4.8);
+      const wz = cz;
+      const wb = world.createRigidBody(R.RigidBodyDesc.fixed()
+        .setTranslation(wx, (top + 2.4) / 2, wz).setRotation(q));
+      world.createCollider(R.ColliderDesc.cuboid(0.3, 1.2, len / 2), wb);
+      c.walls.push({ rot: ang, cx: wx, cz: wz, len, h: 2.4, top,
+        x0: wx - 0.3, x1: wx + 0.3, z0, z1 });
+      c.facades.push({ rot: ang, cx: wx, cz: wz, w: 0.6, len, h: fh, side: s });
+    }
+    const steps = Math.max(2, Math.round(Math.abs(dx) / 1.1) + 1);
+    for (let i = 0; i < steps; i++) {
+      const a = i / steps, b2 = (i + 1) / steps;
+      c.narrows.push([
+        z0 + dz * a, z0 + dz * b2,
+        o.lane ?? 1.35, cx0 + dx * ((a + b2) / 2),
+      ]);
+    }
+    // END CAPS: a rotated slab's short edge is inset on the outside of the
+    // bend, which leaves a triangular wedge where it meets an axis-aligned
+    // street — runners fell through it. Cap both ends with a flat slab at
+    // the matching centre (overlapping solids are free).
+    if (o.cap !== false) {
+      for (const [cz2, capCx] of [[z0 + 0.5, cx0], [z1 - 0.5, cx1]]) {
+        const cb = world.createRigidBody(R.RigidBodyDesc.fixed()
+          .setTranslation(capCx, top - GROUND_HALF, cz2));
+        world.createCollider(
+          R.ColliderDesc.cuboid(half, GROUND_HALF, 2.2), cb);
+        c.segs.push({ x0: capCx - half, x1: capCx + half,
+          z0: cz2 - 2.2, z1: cz2 + 2.2, top });
+      }
+    }
+  };
+  return { ground, step, coinRow, decor, wall, bend };
 }
 
 const DECOR_KINDS = {
@@ -130,6 +185,59 @@ export function makeBounce(R, world, x, z, o = {}) {
 export function makeWind(R, world, z0, z1, o = {}) {
   return { z0, z1, dir: o.dir ?? 1, force: o.force ?? 4.2 };
 }
+
+// ---- Sunset Alleys street set -----------------------------------------
+// Bins and cars are SOLID street furniture: small bins are jumpable, big
+// bins and cars eat a lane (a `narrow` always points at the open one).
+export function makeBin(R, world, x, z, big = false) {
+  const w = big ? 1.4 : 0.6, h = big ? 1.5 : 0.9, d = big ? 0.95 : 0.6;
+  const body = world.createRigidBody(
+    R.RigidBodyDesc.fixed().setTranslation(x, h / 2, z));
+  world.createCollider(R.ColliderDesc.cuboid(w / 2, h / 2, d / 2), body);
+  return { body, x, z, w, h, d, big };
+}
+
+export function makeCar(R, world, x, z, o = {}) {
+  const w = o.w ?? 2.0, h = o.h ?? 1.45, d = o.d ?? 4.2;
+  const rot = o.rot ?? 0;
+  const body = world.createRigidBody(
+    R.RigidBodyDesc.fixed().setTranslation(x, h / 2, z)
+      .setRotation({ x: 0, y: Math.sin(rot / 2), z: 0, w: Math.cos(rot / 2) }));
+  world.createCollider(R.ColliderDesc.cuboid(w / 2, h / 2, d / 2), body);
+  return { body, x, z, w, h, d, rot };
+}
+
+export function makeFountain(R, world, x, z, r = 1.7) {
+  const body = world.createRigidBody(
+    R.RigidBodyDesc.fixed().setTranslation(x, 0.45, z));
+  world.createCollider(R.ColliderDesc.cylinder(0.45, r), body);
+  return { body, x, z, r };
+}
+
+// standing water: a speed multiplier only — never damage, never a fall
+export function makePuddle(x0, x1, z0, z1, mul = 0.55) {
+  return { x0, x1, z0, z1, mul };
+}
+
+export function wetAt(course, pos) {
+  let m = 1;
+  for (const w of course.wets || []) {
+    if (pos.x > w.x0 && pos.x < w.x1 && pos.z > w.z0 && pos.z < w.z1) {
+      m = Math.min(m, w.mul);
+    }
+  }
+  return m;
+}
+
+// Alley critters: a dog (fast, wide sweep) or cat (quick, tighter) darting
+// across the street. Knockback sensor, no collider — parked by hazardsOff.
+export function makeCritter(z, o = {}) {
+  return {
+    kind: o.kind || 'dog', z, x0: o.x0 ?? -3.6, x1: o.x1 ?? 3.6,
+    period: o.period ?? 3.2, phase: o.phase ?? 0, r: o.r ?? 0.5,
+    bx: 0, vel: 0, active: true,
+  };
+}
 // A bridge slab that gives way ~0.6s after you step on it (Crash drop
 // platforms / Stumble Honey Drop). FIXED collider — the character
 // controller treats flush kinematic seams as walls, so it must share the
@@ -151,6 +259,8 @@ function newCourse(theme) {
     segs: [], steps: [], shoulders: [], coins: [], hammers: [], pillars: [],
     pendulums: [], rollers: [], pistons: [], crumbles: [], bounces: [],
     winds: [], crates: [],
+    // Sunset Alleys set: solid street furniture + slow zones + critters
+    bins: [], cars: [], fountains: [], wets: [], critters: [], facades: [],
     checkpoints: [], decor: [], jumpZones: [],
     walls: [], gates: [],       // blocking walls + portcullis gates
     boosts: [], curses: [],     // speed pickups {x, y, z, taken}
@@ -270,11 +380,6 @@ const THEME_DAY = {
 // over the void, a tighter four-wall canyon weave swept by a roller, a
 // TWIN portcullis queue, a direction-flipping crosswind ledge, and Needle
 // v2 with a triple pendulum dancing out of it. Still must win.
-
-const THEME_RIDGE = {
-  sky: 0xf0985a, sand: 0xe0a06a, sandDark: 0xc2854f, rock: 0x9c6b4a,
-  wood: 0x7a4a2c, sea: 0x2a6ea0, sun: 0xffd9a8, hemiGround: 0x6a4a3a,
-};
 
 // The shared first half of both Ridge stages (z 0–100). The canyon weave
 // of alternating walls forces right-left-right chicanes over shoulder-less
@@ -407,137 +512,230 @@ export function buildDayRidge(R, world) {
   return c;
 }
 
-export function buildRidgeLong(R, world) {
-  const c = newCourse(THEME_RIDGE);
-  ridgeFirstHalf(R, world, c);
-  const { ground, coinRow, decor, wall } = kit(R, world, c);
+// ------------------------------------------------- STAGE 2: SUNSET ALLEYS
+// A Temple-Run-style alley district at dusk: tall lit facades press in on a
+// wide street, plazas open up, the road forks around whole buildings, a
+// flooded gallery slows everything down, and the street furniture is real —
+// bins, parked wrecks, a fountain, cats and dogs darting across.
+//
+// Bot contract (headless-enforced): every solid blocker is a chicane (a
+// `narrow` that starts ~1.2m early and points at the open lane), small bins
+// live inside `jumpZones`, water is a speed multiplier only (never a stun or
+// a fall), and every fork lane clears for the worst hero on the roster.
 
-  // ================= SECOND HALF (z 100–200): the gauntlet doubles =========
-  // gap out of the old flag ground: 3m
-  c.jumpZones.push([99.2, 100.6]);
-  coinRow(100.1, 102.8, 3, 1.25);
+const THEME_ALLEY = {
+  sky: 0xf2a25f, sand: 0xe0a06a, sandDark: 0xb98a55, rock: 0x8a7a68,
+  wood: 0x7a4a2c, sea: 0x2a6ea0, sun: 0xffd9a8, hemiGround: 0x6a4a3a,
+};
 
-  // --- HAMMER ALLEY: two turnstiles in counter-phase on wide ground
-  ground(103, 121);
-  c.hammers.push(
-    makeHammer(R, world, 107.5, 1.6, 0),
-    makeHammer(R, world, 114.5, 1.6, Math.PI));
-  coinRow(105, 108, 2, 0.9, -2.4);
-  coinRow(110, 112.5, 2, 0.9, 2.4);
-  c.boosts.push({ x: 0, y: 1.5, z: 104.8, taken: false });
-  c.checkpoints.push({ z: 119.5, x: 0, y: 1.6 });   // before the crossing!
+export function buildAlleys(R, world) {
+  const c = newCourse(THEME_ALLEY);
+  c.alleys = true;                        // higher/pulled-back follow cam
+  const { ground, coinRow, decor, wall, bend } = kit(R, world, c);
+  const facade = (x0, x1, z0, z1, h) => {
+    c.facades.push({ x0, x1, z0, z1, h });
+    wall(x0, x1, z0, z1, Math.max(2.6, Math.min(h, 3.2)));
+  };
 
-  // --- CRUMBLE CROSSING: three slabs over the void, 1.1m gaps — step on
-  // one too slowly and it drops while you stand there. Shoulder-less the
-  // whole way; the checkpoint sits BEFORE it (hazard law), coins bait the
-  // arc over each gap.
-  c.crumbles.push(
-    makeCrumble(R, world, 121, 123.4, { x0: -2.4, x1: 2.4 }),
-    makeCrumble(R, world, 124.5, 126.9, { x0: -2.4, x1: 2.4 }),
-    makeCrumble(R, world, 128, 130.4, { x0: -2.4, x1: 2.4 }));
-  c.jumpZones.push([122.7, 123.8], [126.2, 127.3]);
-  coinRow(123.6, 124.3, 2, 1.35);
-  coinRow(127.1, 127.8, 2, 1.35);
+  // --- 1. START PLAZA (0–14): the alley mouth, stalls, lanterns ----------
+  ground(0, 14, 0, -7, 7);
+  c.checkpoints.push({ z: 10, x: 0, y: 1.6 });
+  c.cars.push(makeCar(R, world, -5.4, 6, { rot: 0.2, w: 1.8, d: 3.8 }));
+  coinRow(3, 12, 4, 0.9, 0);
+  c.decor.push(
+    { kind: 'stall', x: -5.6, z: 4, color: 0xe04a3f, ph: 0 },
+    { kind: 'stall', x: 5.6, z: 8, color: 0x2fae8f, ph: 1.7 },
+    { kind: 'lamp', x: -6.4, z: 2, ph: 0 },
+    { kind: 'lamp', x: 6.4, z: 12, ph: 1.3 },
+    { kind: 'awning', x: -4.4, z: 6, color: 0xff8f5a, ph: 0 },
+    { kind: 'pigeon', x: -3.2, z: 11, ph: 0.4 },
+    { kind: 'pigeon', x: 3.4, z: 3.4, ph: 2.1 },
+    { kind: 'lantern', x: -6.8, z: 9, ph: 0.5 },
+  );
 
-  // --- CANYON WEAVE II: FOUR walls, gates tightened 3.2m → 2.8m, the void
-  // policing every miss, and a roller sweeping the stretch between walls
-  // two and three. Checkpoint sits at the weave mouth. The roller stretch
-  // keeps EARTH shoulders (hazard law: a knockback hit must never drop you
-  // straight into the void — the void still polices the wall chicanes).
-  ground(130.4, 139.2, 0, -4.5, 4.5, 0);
-  ground(139.2, 144, 0);                                  // roller: safe floor
-  ground(144, 152, 0, -4.5, 4.5, 0);
-  c.checkpoints.push({ z: 131.5, x: 0, y: 1.6 });
-  wall(-4.8, -2.8, 134.4, 135.2); wall(0, 4.8, 134.4, 135.2);     // gap L
-  wall(-4.8, 0, 138.4, 139.2);    wall(2.8, 4.8, 138.4, 139.2);   // gap R
-  c.rollers.push(makeRoller(R, world, 141.6, { amp: 2.4, omega: 1.7 }));
-  wall(-4.8, -2.8, 143.6, 144.4); wall(0, 4.8, 143.6, 144.4);     // gap L
-  wall(-4.8, 0, 147.6, 148.4);    wall(2.8, 4.8, 147.6, 148.4);   // gap R
-  c.narrows.push([133.1, 135.5, 1.0, -1.4], [137.1, 139.5, 1.0, 1.4],
-    [142.3, 144.7, 1.0, -1.4], [146.3, 148.7, 1.0, 1.4]);
-  coinRow(134.8, 134.8, 1, 0.9, -1.4);
-  coinRow(138.8, 138.8, 1, 0.9, 1.4);
-  coinRow(144.0, 144.0, 1, 0.9, -1.4);
-  coinRow(148.0, 148.0, 1, 0.9, 1.4);
-  c.curses.push({ x: 1.8, y: 1.4, z: 132.0, taken: false });
+  // --- 2. BAKERY ALLEY (14–48): the street SLIDES RIGHT, holds, slides back
+  bend(14, 23, 0, 3.6, { h: 9 });
+  ground(23, 35, 0, -0.9, 8.1, 0);          // straight centred at 3.6
+  facade(-1.5, -0.9, 23, 35, 9);
+  facade(8.1, 8.7, 23, 35, 8);
+  c.narrows.push([23, 35, 1.9, 3.6]);       // hold the shifted line
+  bend(35, 40, 3.6, 0, { h: 8 });
+  ground(40, 48, 0, -4.5, 4.5, 0);          // back on the centre line
+  facade(-5.1, -4.5, 40, 48, 8);
+  facade(4.5, 5.1, 40, 48, 8);
+  c.bins.push(makeBin(R, world, 5.2, 26), makeBin(R, world, 1.8, 31));
+  c.jumpZones.push([25.3, 26.7], [30.3, 31.7]);
+  c.bins.push(makeBin(R, world, 6.3, 33.5, true));
+  c.narrows.push([32.2, 35.1, 1.9, 2.4]);
+  c.wets.push(makePuddle(-0.9, 8.1, 28.4, 30.6));
+  c.checkpoints.push({ z: 23.5, x: 3.6, y: 1.6 });
+  coinRow(16, 22, 3, 0.9, 1.8);
+  coinRow(24, 34, 4, 0.9, 3.6);
+  c.decor.push(
+    { kind: 'awning', x: -0.8, z: 25, color: 0xffd23e, ph: 0.5 },
+    { kind: 'awning', x: 8.0, z: 30, color: 0xff8fb1, ph: 1.6 },
+    { kind: 'sign', x: 8.1, z: 27, ph: 1.4 },
+    { kind: 'lamp', x: 4.9, z: 15, ph: 0.2 },
+    { kind: 'lamp', x: 8.4, z: 24, ph: 1.1 },
+    { kind: 'lamp', x: -1.2, z: 33, ph: 2.0 },
+    { kind: 'laundry', x: 3.6, z: 30, w: 9, ph: 0.3 },
+    { kind: 'pigeon', x: 2.4, z: 29, ph: 1.2 },
+  );
 
-  // --- TWIN PORTCULLIS QUEUE: two one-lane slits, counter-phase gates —
-  // the pack queues, splits, and queues again
-  ground(152, 163);
-  wall(-4.8, -2.65, 154, 155); wall(-1.35, 4.8, 154, 155);
-  c.gates.push(makeGate(R, world, 154.5, { cx: -2, gw: 1.3, period: 3.2 }));
-  c.narrows.push([152.9, 155.7, 0.55, -2]);
-  wall(-4.8, -1.35, 158.5, 159.5); wall(2.65, 4.8, 158.5, 159.5);
-  c.gates.push(makeGate(R, world, 159,
-    { cx: 2, gw: 1.3, period: 3.2, phase: Math.PI }));
-  c.narrows.push([157.4, 160.2, 0.55, 2]);
-  coinRow(154.5, 154.5, 1, 0.9, -2);
-  coinRow(159, 159, 1, 0.9, 2);
-  c.checkpoints.push({ z: 162, x: 0, y: 1.6 });
+  // --- 3. FORK #1 (48–70): split around a whole building -----------------
+  ground(48, 70, 0, -4.5, 4.5, 0);
+  wall(-1.5, 1.5, 48, 68, 6);              // the building island
+  c.facades.push({ x0: -1.5, x1: 1.5, z0: 48, z1: 68, h: 7 });
+  c.narrows.push([44.6, 68, 1.15, 3.0]);   // bot route: dry right lane
+  c.wets.push(makePuddle(-4.5, -1.5, 53, 63));
+  c.cars.push(makeCar(R, world, 3.6, 58, { w: 1.9, d: 4.4, h: 2.1 }));
+  c.narrows.push([54.2, 60.6, 0.8, 2.1]);
+  coinRow(50, 66, 5, 0.9, 3.0);
+  c.decor.push(
+    { kind: 'laundry', x: 0, z: 54, w: 3, ph: 0.6 },
+    { kind: 'sign', x: 4.5, z: 64, ph: 0.8 },
+    { kind: 'lamp', x: -4.8, z: 51, ph: 0.3 },
+  );
+  c.checkpoints.push({ z: 69, x: 0, y: 1.6 });
 
-  // --- CROSSWIND LEDGE II: the wind FLIPS direction halfway across —
-  // lean in, then lean the other way before the far edge
-  ground(163, 176, 0, -3, 3, 0);
-  c.winds.push(makeWind(R, world, 163.2, 169.5, { dir: 1, force: 2.2 }));
-  c.winds.push(makeWind(R, world, 169.5, 175.8, { dir: -1, force: 2.2 }));
-  c.narrows.push([162.8, 176.2, 1.6]);
-  coinRow(164, 175, 4);
-  c.curses.push({ x: 0, y: 1.4, z: 167, taken: false });
+  // --- 4. MARKET SQUARE (70–96): fountain, stalls, a dog crossing --------
+  ground(70, 96, 0, -7, 7);
+  c.fountains.push(makeFountain(R, world, 0, 82, 1.7));
+  c.narrows.push([75.8, 85.8, 1.5, 2.9]);
+  c.critters.push(makeCritter(90, { kind: 'dog', x0: -5, x1: 5, period: 3.4 }));
+  coinRow(74, 78, 3, 0.9, 0);
+  coinRow(86, 94, 4, 0.9, 3.2);
+  c.decor.push(
+    { kind: 'stall', x: -5.4, z: 74, color: 0xffd23e, ph: 0 },
+    { kind: 'stall', x: 5.4, z: 78, color: 0xe04a3f, ph: 1.2 },
+    { kind: 'stall', x: -5.4, z: 92, color: 0x5ad1ff, ph: 2.1 },
+    { kind: 'arch', x: 0, z: 72, w: 9.4, h: 4.4 },
+    { kind: 'arch', x: 0, z: 95, w: 9.4, h: 4.6 },
+    { kind: 'lamp', x: 6.2, z: 84, ph: 0.4 },
+    { kind: 'lamp', x: -6.2, z: 88, ph: 1.9 },
+    { kind: 'pigeon', x: -2.6, z: 88, ph: 0.9 },
+    { kind: 'pigeon', x: 2.8, z: 94, ph: 2.4 },
+  );
 
-  // gap off the ledge: 3m
-  c.jumpZones.push([175.2, 176.6]);
-  coinRow(176.1, 178.8, 3, 1.25);
+  // --- 5. STAIRS & GALLERY (96–123): two 0.7m steps, then a long walk -----
+  c.jumpZones.push([95.3, 96.2]);
+  ground(96, 100, 0.7, -4.5, 4.5, 0);
+  c.jumpZones.push([99.3, 100.2]);
+  ground(100, 120, 1.4, -4.5, 4.5, 0);
+  wall(-5.1, -4.5, 100, 120, 1.1, 1.4);    // gallery railings
+  wall(4.5, 5.1, 100, 120, 1.1, 1.4);
+  c.facades.push({ x0: -5.1, x1: -4.5, z0: 100, z1: 120, h: 8 });
+  c.facades.push({ x0: 4.5, x1: 5.1, z0: 100, z1: 120, h: 8 });
+  ground(120, 123, 0.7, -4.5, 4.5, 0);
+  coinRow(98, 118, 6, 2.2);
+  c.checkpoints.push({ z: 102, x: 0, y: 1.6 });
+  c.decor.push(
+    { kind: 'laundry', x: 0, z: 108, w: 9, ph: 0.2 },
+    { kind: 'laundry', x: 0, z: 114, w: 9, ph: 1.4 },
+    { kind: 'lamp', x: 4.8, z: 104, ph: 0.7 },
+    { kind: 'lamp', x: -4.8, z: 112, ph: 2.0 },
+    { kind: 'sign', x: 4.5, z: 118, ph: 1.1 },
+  );
 
-  // --- NEEDLE v2: a 2m single-file throat, then a TRIPLE pendulum — no
-  // two racers leave the stones side by side, and the balls decide who
-  // leaves them standing
-  ground(179, 200);
-  c.checkpoints.push({ z: 179.8, x: 0, y: 1.6 });
-  wall(-4.8, -0.575, 181.5, 183.5); wall(0.575, 4.8, 181.5, 183.5);
-  c.narrows.push([180.1, 183.7, 0.45, 0]);
-  coinRow(182.5, 182.5, 1, 0.9, 0);
-  c.pendulums.push(
-    makePendulum(R, world, 186, { ampA: 1.05, omega: 2.3, phase: 0 }),
-    makePendulum(R, world, 187.6, { ampA: 1.05, omega: 2.3, phase: Math.PI }),
-    makePendulum(R, world, 189.2, { ampA: 1.05, omega: 2.3, phase: Math.PI / 2 }));
+  // --- 6. PARKING ALLEY (123–158): the street SLIDES LEFT ---------------
+  ground(123, 130, 0, -4.5, 4.5, 0);
+  facade(-5.1, -4.5, 123, 130, 9);
+  facade(4.5, 5.1, 123, 130, 7);
+  c.cars.push(makeCar(R, world, 2.4, 124, { w: 1.8, d: 3.8, rot: 0.4 }));
+  c.narrows.push([116.5, 127, 1.9, -1.4]);
+  bend(130, 138, 0, -4.0, { h: 9 });
+  ground(138, 150, 0, -8.5, 0.5, 0);        // straight centred at -4.0
+  facade(-8.8, -8.2, 138, 150, 9);
+  facade(0.2, 0.8, 138, 150, 7);
+  bend(150, 156, -4.0, 0, { h: 8 });
+  ground(156, 160, 0, -4.5, 4.5, 0);   // straight lead into fork #2
+  c.narrows.push([138, 150, 1.9, -4.0]);    // hold the shifted line (fallback)
+  c.cars.push(
+    makeCar(R, world, -1.5, 141, { w: 1.8, d: 4.0 }),
+    makeCar(R, world, -6.4, 146, { w: 1.8, d: 4.2 }));
+  // car lanes FIRST (they must beat the plain lane narrow), each led early
+  c.narrows.push([137.2, 142.6, 1.9, -5.4], [142.9, 148.6, 1.9, -2.5]);
+  c.wets.push(makePuddle(-8.5, 0.5, 135.5, 138.4, 0.5),
+    makePuddle(-8.5, -2.2, 147.8, 149.8, 0.55));
+  c.critters.push(makeCritter(148, { kind: 'cat', x0: -8, x1: 0,
+    period: 2.6, phase: 1.1 }));
+  coinRow(139.2, 142.2, 2, 0.9, -3.0);
+  c.decor.push(
+    { kind: 'sign', x: 0.2, z: 139, ph: 0.4 },
+    { kind: 'lamp', x: -8.2, z: 139, ph: 0.9 },
+    { kind: 'lamp', x: -8.2, z: 144, ph: 2.2 },
+    { kind: 'pigeon', x: -0.6, z: 143, ph: 0.3 },
+  );
 
-  // --- FINAL SPRINT: grab the boost out of the pendulum dance; a parting
-  // hammer guards the flag
-  c.boosts.push({ x: 0, y: 1.5, z: 190.5, taken: false });
-  c.hammers.push(makeHammer(R, world, 196.5, 1.9, 0));
-  coinRow(197.5, 199.5, 2, 0.9, 2.4);
+  // --- 7. FORK #2 (158–180): the laundromat split ------------------------
+  ground(160, 182, 0, -4.5, 4.5, 0);
+  wall(-1.8, 1.8, 160, 180, 6);
+  c.facades.push({ x0: -1.8, x1: 1.8, z0: 160, z1: 180, h: 8 });
+  c.narrows.push([156.6, 180, 1.15, 3.1]);
+  c.wets.push(makePuddle(1.8, 4.5, 166, 172, 0.5));
+  c.bins.push(makeBin(R, world, 2.9, 176));
+  c.jumpZones.push([175.3, 176.7]);
+  c.narrows.push([174.4, 177.6, 0.6, 3.9]);
+  c.critters.push(makeCritter(170, { kind: 'cat', x0: 1.9, x1: 4.4,
+    period: 2.2, phase: 0.4 }));
+  coinRow(162, 178, 4, 0.9, 3.1);
+  c.decor.push(
+    { kind: 'laundry', x: 3.1, z: 164, w: 3, ph: 0.5 },
+    { kind: 'laundry', x: 3.1, z: 174, w: 3, ph: 1.8 },
+    { kind: 'sign', x: -4.5, z: 164, ph: 1.0 },
+    { kind: 'lamp', x: -4.8, z: 178, ph: 0.6 },
+  );
 
-  c.finishZ = 199.5;
+  // --- 8. GATE RUN (180–212): archway, then the street SLIDES RIGHT ------
+  ground(182, 198, 0, -4.5, 4.5, 0);
+  wall(-4.6, -0.62, 190, 192); wall(0.62, 4.6, 190, 192);
+  c.narrows.push([184.4, 192.4, 0.5, 0]);
+  c.facades.push({ x0: -4.6, x1: -0.62, z0: 190, z1: 192, h: 7 });
+  c.facades.push({ x0: 0.62, x1: 4.6, z0: 190, z1: 192, h: 7 });
+  c.pendulums.push(makePendulum(R, world, 197, { ampA: 1.0, omega: 2.1 }));
+  c.checkpoints.push({ z: 184, x: 0, y: 1.6 });
+  coinRow(182, 196, 4, 0.9, 0);
+  c.decor.push(
+    { kind: 'arch', x: 0, z: 188, w: 9.4, h: 5 },
+    { kind: 'arch', x: 0, z: 194, w: 9.4, h: 5 },
+    { kind: 'lamp', x: 4.8, z: 186, ph: 0.2 },
+    { kind: 'lamp', x: -4.8, z: 196, ph: 1.6 },
+    { kind: 'sign', x: 4.5, z: 198, ph: 0.9 },
+  );
+  bend(198, 204, 0, 2.5, { h: 7 });
+  ground(204, 212, 0, -2.0, 7.0, 0);        // finish straight centred at 2.5
+  c.narrows.push([204, 212, 1.9, 2.5]);
+  facade(-2.3, -1.7, 204, 212, 8);
+  facade(7.0, 7.6, 204, 212, 7);
+  c.critters.push(makeCritter(206, { kind: 'dog', x0: -1.5, x1: 6.5,
+    period: 3.0, phase: 0.7 }));
+  coinRow(205, 210, 3, 0.9, 2.5);
+
+  // speed pickups: an overtake after each fork, a jinx squatting in the oil
+  c.boosts.push({ x: 0, y: 1.5, z: 68, taken: false });
+  c.boosts.push({ x: 0, y: 1.5, z: 182.5, taken: false });
+  c.curses.push({ x: -3.4, y: 1.4, z: 137, taken: false });
+
+  c.finishZ = 211.5;
   c.spawn = { x: 0, y: 1.6, z: 0 };
   c.coinTotal = c.coins.length;
 
-  for (let z = 104; z < 196; z += 14.5) {
-    decor('palm', (z / 14.5 | 0) % 2 ? 6.6 : -6.6, z);
-  }
-  decor('rock', -5.8, 105); decor('rock', 6, 152); decor('rock', -6, 195);
-
-  // --- ambient life: dusk over the double ridge ---
-  for (let z = 6; z < 196; z += 11) {
-    const s = (z / 11 | 0) % 2 ? 1 : -1;
-    c.decor.push({ kind: 'firefly', x: s * (5.4 + (z % 3)), y: 1.4,
-      z, ph: z * 0.9, r: 1.0 });
-    if (z % 22 < 11) {
-      c.decor.push({ kind: 'cactus', x: s * 8.2, z: z + 4,
-        h: 2 + (z % 3) * 0.3 });
+  // --- ambient life: dusk in the alleys ----------------------------------
+  for (let z = 16; z < 208; z += 13) {
+    const s = (z / 13 | 0) % 2 ? 1 : -1;
+    c.decor.push({ kind: 'firefly', x: s * (5.6 + (z % 3)), y: 1.5,
+      z, ph: z * 0.8, r: 0.9 });
+    if (z % 26 < 13) {
+      c.decor.push({ kind: 'lantern', x: -s * 6.2, z: z + 4, ph: z * 0.5 });
     }
   }
   c.decor.push(
-    { kind: 'tumbleweed', x: -7, z: 30, range: 5, speed: 1.6, ph: 0 },
-    { kind: 'tumbleweed', x: 7, z: 120, range: 6, speed: 1.3, ph: 2.2 },
-    { kind: 'vulture', r: 26, h: 16, ph: 0.8 },
-    { kind: 'vulture', r: 32, h: 18, ph: 3.4 },
-    { kind: 'lantern', x: 6.4, z: 60, ph: 0 },
-    { kind: 'lantern', x: -6.4, z: 130, ph: 1.5 },
-    { kind: 'lantern', x: 6.4, z: 185, ph: 2.7 },
-    { kind: 'cloud', x: -10, y: 20, z: 120, minX: -30, maxX: 30,
-      speed: 0.3, ph: 1 },
-    { kind: 'cloud', x: 12, y: 22, z: 160, minX: -30, maxX: 30,
-      speed: 0.4, ph: 3 },
+    { kind: 'cloud', x: -10, y: 20, z: 40, minX: -30, maxX: 30,
+      speed: 0.25, ph: 1 },
+    { kind: 'cloud', x: 12, y: 22, z: 140, minX: -30, maxX: 30,
+      speed: 0.35, ph: 3 },
+    { kind: 'gull', r: 22, h: 16, ph: 0.6 },
+    { kind: 'lantern', x: 6.2, z: 200, ph: 1.1 },
   );
   return c;
 }
@@ -818,6 +1016,7 @@ export function courseStep(R, course, frame, hero = null) {
     for (const r of course.rollers) park(r.body);
     for (const p of course.pistons) park(p.body);
     for (const g of course.gates) park(g.body);
+    for (const k of course.critters || []) k.active = false;   // no sensors
     return;
   }
   for (const h of course.hammers) {
@@ -825,6 +1024,14 @@ export function courseStep(R, course, frame, hero = null) {
     h.body.setNextKinematicRotation(
       { x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos(a / 2) });
     h.harm = a;
+  }
+  // alley critters dart across the street on their own cycle
+  for (const k of course.critters || []) {
+    k.active = true;
+    const a = (t / k.period) * Math.PI * 2 + k.phase;
+    const mid = (k.x0 + k.x1) / 2, half = (k.x1 - k.x0) / 2;
+    k.bx = mid + Math.sin(a) * half;
+    k.vel = Math.cos(a);
   }
   for (const p of course.pillars) {
     const y = p.y0 + Math.sin(t * p.omega + p.phase) * p.amp;
@@ -965,6 +1172,13 @@ export function hazardTouch(course, pos) {
     if (Math.abs(pos.x - p.bx) < 0.7 + R_ && Math.abs(pos.z - p.z) < 0.5 + R_)
       return { kx: Math.sign(p.vel) * 6.6, kz: -2 };
   }
+  // alley critters: a darting dog/cat clips your legs and knocks you sideways
+  for (const k of course.critters || []) {
+    if (k.active === false) continue;
+    const dx = pos.x - k.bx, dz = pos.z - k.z;
+    if (Math.hypot(dx, dz) < k.r + R_ && Math.abs(pos.y - 0.5) < 0.95)
+      return { kx: Math.sign(k.vel || 1) * 5.6, kz: -2.2 };
+  }
   return null;
 }
 
@@ -993,8 +1207,8 @@ export const MAP_SPACING = 6;
 export const LEVELS = [
   { id: 'dayridge', nameKey: 'level.dayridge', build: buildDayRidge,
     theme: THEME_DAY, timeLimit: 90, passPlace: 3 },
-  { id: 'ridge', nameKey: 'level.ridge', build: buildRidgeLong,
-    theme: THEME_RIDGE, timeLimit: 165, passPlace: 1 },
+  { id: 'alleys', nameKey: 'level.alleys', build: buildAlleys,
+    theme: THEME_ALLEY, timeLimit: 165, passPlace: 1 },
   { id: 'crates', nameKey: 'level.crates', build: buildCrates,
     theme: THEME_CRATES, mode: 'crates', passPlace: 99 },
   { id: 'arena', nameKey: 'level.arena', build: buildArena, theme: THEME_ARENA,

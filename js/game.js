@@ -13,7 +13,7 @@ import { createWorld } from './phys.js';
 import { Player, HERO_IDS, CHARACTERS } from './hero.js';
 import {
   LEVELS, courseStep, hazardTouch, windAt, arenaStep, ARENA,
-  crateStep, CRATES, MAP_SPACING,
+  crateStep, CRATES, MAP_SPACING, wetAt,
 } from './levels.js';
 import { makeRivals } from './rivals.js';
 
@@ -233,8 +233,10 @@ export default class Game {
         run.P.step({ x: 0, z: 0, jump: false, jumpHeld: false, spin: false });
         return;
       }
-      const ff = this.hazardsOff ? f
-        : { ...f, windX: windAt(this.course, run.P.pos) };
+      // water slows every runner even with hazards parked (it is a surface,
+      // not a hazard) — the bot reachability runs measure the real pace
+      const ff = { ...f, wet: wetAt(this.course, run.P.pos) };
+      if (!this.hazardsOff) ff.windX = windAt(this.course, run.P.pos);
       if (ff.spin && i === 0) this.sfx('spin');
       run.P.step(ff);
       if (i === 0 && run.P.jumped) this.sfx('jump');
