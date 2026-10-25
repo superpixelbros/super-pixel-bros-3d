@@ -113,6 +113,14 @@ export class Player {
     this.invuln = 0;         // frames of post-hit mercy
     this.stun = 0;           // frames of knockback tumble (no control)
     this.dead = false;
+    // punch / carry / throw (Crate Cove + Arena): one hero rides above
+    // another's head and mashing breaks free; throwing is ballistic.
+    this.carry = null;       // Player being carried over this one's head
+    this.carrier = null;     // Player carrying this one
+    this.escapeP = 0;        // struggle presses while carried
+    this.carryT = 0;         // frames since grabbed (failsafe clock)
+    this.punchT = 0;         // punch animation frames
+    this.throwT = 0;         // ballistic frames after a throw
   }
 
   // knock the hero: side (kx) + forward/back (kz) impulses + a rise.
@@ -129,6 +137,66 @@ export class Player {
   }
 
   bounce(v) { this.vy = v; this.grounded = false; this.cutArmed = false; }
+
+  // ---- punch / carry / throw (free modes) --------------------------------
+  // grab: hoist the target overhead. Neither may already carry/be carried.
+  grab(target) {
+    if (!target || target === this || this.carrier || this.carry) return false;
+    if (target.carrier || target.carry || target.dead) return false;
+    this.carry = target;
+    target.carrier = this;
+    target.escapeP = 0;
+    target.carryT = 0;
+    target.vx = target.vy = target.vz = 0;
+    target.grounded = false;
+    return true;
+  }
+
+  // a carried hero mashes jump/action; six presses break the hold
+  struggle() {
+    if (!this.carrier) return false;
+    this.escapeP += 1;
+    if (this.escapeP >= 6) { this.breakFree(); return true; }
+    return false;
+  }
+
+  breakFree() {
+    const c = this.carrier;
+    if (!c) return false;
+    c.carry = null;
+    this.carrier = null;
+    this.escapeP = 0;
+    // both stumble apart — the escapee gets the cleaner landing
+    const dir = (this.pos.x >= c.pos.x) ? 1 : -1;
+    this.stun = 12; this.vy = 3.2; this.vx = dir * 3.4; this.vz = -1.5;
+    c.stun = 16; c.vx = -dir * 2.2; c.vz = -1.5;
+    return true;
+  }
+
+  // throw: forward (+Z, the camera's forward) and up, ballistic until landing
+  throwCarried() {
+    const t = this.carry;
+    if (!t) return null;
+    this.carry = null;
+    t.carrier = null;
+    t.escapeP = 0;
+    t.throwT = 40;
+    t.stun = 24;
+    t.vx = Math.sin(this.yaw) * 7.5;
+    t.vz = Math.max(Math.cos(this.yaw), 0.2) * 8;
+    t.vy = 6.5;
+    t.grounded = false;
+    return t;
+  }
+
+  // punch: a stagger, no hearts (hearts stay for hazards in the arena)
+  shove(kx, kz, up = 3.4) {
+    if (this.carrier || this.dead) return false;
+    this.stun = Math.max(this.stun, 12);
+    this.vx = kx; this.vz = kz; this.vy = Math.max(this.vy, up);
+    this.grounded = false;
+    return true;
+  }
 
   // grab a speed pickup: kind +1 = boost ring, -1 = jinx orb. A new pickup
   // simply replaces whatever was running — no stacking.
@@ -162,11 +230,31 @@ export class Player {
 
     if (flags.spin && !stunned && this.spinT <= 0) this.spinT = 28; // ~0.46s
     if (this.spinT > 0) this.spinT -= 1;
+    if (this.punchT > 0) this.punchT -= 1;
+
+    // carried: ride the carrier's head, no steering, no gravity. Mashing
+    // jump (or the action button, handled by the game) breaks the hold.
+    if (this.carrier) {
+      this.carryT += 1;
+      if (flags.jump) this.struggle();
+      if (this.carryT > 240) this.breakFree();      // failsafe, never stuck
+      if (this.carrier) {
+        const cp = this.carrier.body.translation();
+        this.body.setTranslation({ x: cp.x, y: cp.y + 1.02, z: cp.z }, true);
+        this.vx = this.vy = this.vz = 0;
+        this.grounded = false;
+        this.speed2D = 0;
+        this.jumped = false;
+        return;
+      }
+    }
 
     // auto-run along +Z (race) — or, in FREE mode (arena), the z flag
     // drives forward/back and both axes decelerate on their own. Steering
     // blends lateral speed; wind pushes regardless. Stun locks both.
-    const mul = this.speedMul;
+    // Carrying a hero slows the carrier; a just-thrown hero keeps momentum
+    // (ballistic) until `throwT` runs out.
+    const mul = this.speedMul * (this.carry ? 0.78 : 1);
     let targetVz, targetVx;
     if (this.free) {
       targetVz = stunned ? 0 : (flags.z || 0) * d.speed * 0.82 * mul;
@@ -177,11 +265,16 @@ export class Player {
         stunned ? 0 : flags.x * d.speed * 0.85 * (d.steer ?? 1) * mul;
       targetVx = steer + (stunned ? 0 : (flags.windX || 0));
     }
+    if (this.throwT > 0) {
+      this.throwT -= 1;
+      targetVz = this.vz;              // no steering, no drag: ballistic
+      targetVx = this.vx;
+    }
     const air = !this.grounded;
     const airMul = air ? 0.6 * (d.airCtrl ?? 1) : 1;
     this.vz = approach(this.vz, targetVz, d.accel * airMul * dt);
     this.vx = approach(this.vx, targetVx, d.accel * airMul * dt);
-    if (this.free && !air) {
+    if (this.free && !air && this.throwT <= 0) {
       if (!flags.z) this.vz = approach(this.vz, 0, d.friction * dt);
       if (!flags.x) this.vx = approach(this.vx, 0, d.friction * dt);
     } else if (!this.autoRun && !air && !flags.x) {
@@ -248,6 +341,11 @@ export class Player {
     this.vx = this.vy = 0; this.vz = 0;
     this.spinT = 0;
     this.mod = 0; this.modT = 0;   // dying washes the jinx off
+    // never respawn still holding / being held / mid-throw
+    if (this.carry) this.carry.carrier = null;
+    if (this.carrier) this.carrier.carry = null;
+    this.carry = null; this.carrier = null;
+    this.escapeP = 0; this.throwT = 0; this.punchT = 0;
     // respawn at a checkpoint = full recovery with a breath of grace
     this.hp = this.maxHp;
     this.dead = false;

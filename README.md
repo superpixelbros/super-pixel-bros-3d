@@ -1,15 +1,15 @@
-# Super Pixel Bros 3D
+# Paxala · بَكْسَلَة
 
-The 3D sibling of **Super Pixel Bros**: a Crash-Bandicoot-style 3D platformer
-with Stumble-Guys-style chaos — auto-run through a sunny obstacle course,
-jump and spin past swinging hammers and bobbing pillars, race the clock (and
-future rivals), grab every coin, hit the flag, win the trophy.
+A Crash-Bandicoot-style 3D platformer with Stumble-Guys chaos — auto-run
+through a gauntlet of canyon gates and swinging hazards, race the AI field,
+survive the Crate Cove and the Bumper Arena, win the trophy. Playable solo
+or **two-player split screen** on one screen.
 
 Vanilla JavaScript (ES modules) + [three.js](https://threejs.org) for
 rendering + [Rapier](https://rapier.rs) for physics, loaded from `vendor/`
 (checked in, MIT/Apache). **No build step, no bundler, no asset files** —
 every model is boxes-and-cylinders assembled in code, UI is crisp DOM panels
-over the live 3D scene. Same family rules as the 2D game, same five heroes.
+over the live 3D scene. Same family rules as the 2D game.
 
 **Repo:** <https://github.com/superpixelbros/super-pixel-bros-3d>
 

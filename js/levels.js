@@ -382,6 +382,25 @@ function ridgeFirstHalf(R, world, c) {
 export function buildDayRidge(R, world) {
   const c = newCourse(THEME_DAY);
   ridgeFirstHalf(R, world, c);
+  // --- ambient life: dawn over the ridge ---
+  for (let z = 4; z < 96; z += 9) {
+    const s = (z / 9 | 0) % 2 ? 1 : -1;
+    c.decor.push({ kind: 'fern', x: s * 6.1, z, ph: z * 0.7 });
+    c.decor.push({ kind: 'flower', x: s * 7.0, z: z + 3.2, ph: z * 0.4 });
+  }
+  for (let z = 10; z < 95; z += 18) {
+    c.decor.push({
+      kind: 'butterfly', x: ((z / 18) | 0) % 2 ? 5.2 : -5.2, z,
+      color: ((z / 18 | 0) % 2) ? 0xffd23e : 0xff8fb1, ph: z * 0.3,
+    });
+  }
+  c.decor.push(
+    { kind: 'cloud', x: -12, y: 17, z: 10, minX: -24, maxX: 24, speed: 0.5 },
+    { kind: 'cloud', x: 8, y: 19, z: 40, minX: -24, maxX: 24, speed: 0.35, ph: 2 },
+    { kind: 'cloud', x: -4, y: 16, z: 72, minX: -24, maxX: 24, speed: 0.45, ph: 4 },
+    { kind: 'gull', r: 12, h: 11, ph: 0.4 },
+    { kind: 'gull', r: 15, h: 13, ph: 2.6 },
+  );
   c.finishZ = 99.5;
   c.spawn = { x: 0, y: 1.6, z: 0 };
   c.coinTotal = c.coins.length;
@@ -496,6 +515,30 @@ export function buildRidgeLong(R, world) {
     decor('palm', (z / 14.5 | 0) % 2 ? 6.6 : -6.6, z);
   }
   decor('rock', -5.8, 105); decor('rock', 6, 152); decor('rock', -6, 195);
+
+  // --- ambient life: dusk over the double ridge ---
+  for (let z = 6; z < 196; z += 11) {
+    const s = (z / 11 | 0) % 2 ? 1 : -1;
+    c.decor.push({ kind: 'firefly', x: s * (5.4 + (z % 3)), y: 1.4,
+      z, ph: z * 0.9, r: 1.0 });
+    if (z % 22 < 11) {
+      c.decor.push({ kind: 'cactus', x: s * 8.2, z: z + 4,
+        h: 2 + (z % 3) * 0.3 });
+    }
+  }
+  c.decor.push(
+    { kind: 'tumbleweed', x: -7, z: 30, range: 5, speed: 1.6, ph: 0 },
+    { kind: 'tumbleweed', x: 7, z: 120, range: 6, speed: 1.3, ph: 2.2 },
+    { kind: 'vulture', r: 26, h: 16, ph: 0.8 },
+    { kind: 'vulture', r: 32, h: 18, ph: 3.4 },
+    { kind: 'lantern', x: 6.4, z: 60, ph: 0 },
+    { kind: 'lantern', x: -6.4, z: 130, ph: 1.5 },
+    { kind: 'lantern', x: 6.4, z: 185, ph: 2.7 },
+    { kind: 'cloud', x: -10, y: 20, z: 120, minX: -30, maxX: 30,
+      speed: 0.3, ph: 1 },
+    { kind: 'cloud', x: 12, y: 22, z: 160, minX: -30, maxX: 30,
+      speed: 0.4, ph: 3 },
+  );
   return c;
 }
 
@@ -598,6 +641,14 @@ export function buildCrates(R, world, seed = (Date.now() | 0) % 2147483647) {
     { kind: 'gull', r: 12, h: 8.5, ph: 4.3 },
     { kind: 'drift', x: 10.4, z: -1.6, ph: 0.6 },  // driftwood
     { kind: 'drift', x: -9.8, z: 2.2, ph: 2.9 },
+    // underwater life breaking the surface + crabs scuttling on two decks
+    { kind: 'fish', x: 7.5, z: -2, ph: 0, speed: 0.7 },
+    { kind: 'fish', x: -7.8, z: 3.2, ph: 0.9, speed: 0.9 },
+    { kind: 'fish', x: 2.5, z: 7.5, ph: 1.6, speed: 0.6 },
+    { kind: 'crab', x: -1.95, z: 3.9, range: 0.8, y: 0.82 },
+    { kind: 'crab', x: 5.85, z: -3.9, range: 0.8, y: 0.82, ph: 1.8 },
+    { kind: 'spout', x: 24, z: -6, ph: 0 },
+    { kind: 'spout', x: -26, z: 12, ph: 0.5 },
   );
 
   // five dry starts: P1, P2 (2P), then the three rivals on the remaining
@@ -726,6 +777,21 @@ export function buildArena(R, world) {
   c.finishZ = Infinity;      // survival: there is no flag, only the clock
   c.coinTotal = 0;
   c.ringR = ARENA.startR;
+
+  // --- ambient life: a show night at the bumper arena ---
+  c.decor.push(
+    { kind: 'banner', x: 10.4, z: -5.6, color: 0xffd23e, ph: 0 },
+    { kind: 'banner', x: -10.4, z: -5.6, color: 0xe04a3f, ph: 1.1 },
+    { kind: 'banner', x: 10.4, z: 5.6, color: 0x5ad1ff, ph: 2.2 },
+    { kind: 'banner', x: -10.4, z: 5.6, color: 0xff6f91, ph: 3.1 },
+    { kind: 'balloon', x: -6, z: -10, y: 7, color: 0xff6f91, ph: 0 },
+    { kind: 'balloon', x: 6, z: -11, y: 8, color: 0xffd23e, ph: 1.4 },
+    { kind: 'balloon', x: 0, z: -12, y: 8.5, color: 0x7cf07c, ph: 2.9 },
+    { kind: 'spotlight', x: -6, z: 0, ph: 0 },
+    { kind: 'spotlight', x: 6, z: 0, ph: 1.6, color: 0xffd9a0 },
+    { kind: 'confetti' },
+    { kind: 'gull', r: 18, h: 14, ph: 1.2 },
+  );
   return c;
 }
 

@@ -37,6 +37,8 @@ export class Rival {
     this.finishT = 0;
     this.out = false;          // crates mode: true once in the water
     this.hold = 0;
+    this.actT = 0;             // grab cooldown (crates)
+    this.holdT = 0;            // frames spent carrying someone
     this.blockT = 0;
     this.cp = { ...spawn };   // last checkpoint passed
     this.seed = idx * 2.4 + 0.7;
@@ -106,7 +108,7 @@ export class Rival {
   // Crate Cove tick: read the shared hop brain, drive the free-control rig,
   // and report elimination the moment the runner dips into the sea. The
   // caller (game.stepCrates) owns the world.step and win/lose bookkeeping.
-  stepCrates(course, frame) {
+  stepCrates(course, frame, targets = []) {
     const p = this.player;
     if (this.out) return { out: true };
     const q = p.pos;
@@ -115,6 +117,31 @@ export class Rival {
       // park the body under the sea so the rival visibly leaves the game
       p.body.setNextKinematicTranslation({ x: q.x, y: -40, z: q.z });
       return { out: true };
+    }
+    // being carried: mash to break free (roughly one press every 9 frames)
+    if (p.carrier) {
+      if (frame % 9 === 0) p.struggle();
+      return { out: false };
+    }
+    // carrying someone: hold on for a beat, then hurl them
+    if (p.carry) {
+      this.holdT += 1;
+      if (this.holdT > 100) { p.throwCarried(); this.holdT = 0; }
+    } else this.holdT = 0;
+    // aggression: grab a neighbour when off cooldown (players included)
+    this.actT = Math.max(0, this.actT - 1);
+    if (this.actT === 0 && !p.carry) {
+      for (const t of targets) {
+        if (!t || t === p || t.carrier || t.carry || t.dead) continue;
+        const b = t.pos;
+        if (Math.hypot(b.x - q.x, b.z - q.z) < 1.0
+          && Math.abs(b.y - q.y) < 1.1) {
+          p.grab(t);
+          this.actT = 150;
+          this.holdT = 0;
+          break;
+        }
+      }
     }
     const h = crateHop(course, q, p.grounded, frame);
     if (h.jump) this.hold = 26;

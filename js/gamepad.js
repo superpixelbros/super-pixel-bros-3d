@@ -19,9 +19,10 @@ const BUTTONS = {
   0: ['Space', 'Enter'],
   1: ['Escape'],      // ◯ (right) — universal back: play→pause, pause→
                       // resume, map/cards→title (main.js routes ESC)
-  2: ['Space'],       // X — alt jump
+  2: ['ShiftLeft'],   // □ (left of the right cluster) — ACTION in the
+                      // free modes: punch → grab → throw
   3: ['Enter'],       // Y — confirm
-  5: ['ShiftLeft'],   // RB — spin
+  5: ['ShiftLeft'],   // RB — spin (races) / action (free modes)
   9: ['Escape', 'KeyQ'], // Start — context quit: ESC half opens/resumes
                       // the pause (main.js orders resume before Q), Q
                       // half quits to title on map & cards

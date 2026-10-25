@@ -356,6 +356,60 @@ export default class Game {
     }
   }
 
+  // ---- punch / carry / throw (free modes only) --------------------------
+  // Lives in Game because it needs the whole cast; the Player owns the
+  // state (grab/throwCarried/struggle/shove).
+  actorTargets() {
+    const out = [];
+    for (const run of this.runs) if (!run.out) out.push(run.P);
+    for (const r of this.rivals) if (!r.out) out.push(r.player);
+    return out;
+  }
+
+  nearestActor(P, reach) {
+    let best = null, bd = reach;
+    const a = P.pos;
+    for (const q of this.actorTargets()) {
+      if (q === P || q.carrier || q.carry || q.dead) continue;
+      const b = q.pos;
+      const d = Math.hypot(a.x - b.x, a.z - b.z);
+      if (d < bd && Math.abs(a.y - b.y) < 1.2) { bd = d; best = q; }
+    }
+    return best;
+  }
+
+  releaseHeld(P) {
+    if (P.carry) { P.carry.carrier = null; P.carry = null; }
+    if (P.carrier) { P.carrier.carry = null; P.carrier = null; }
+    P.escapeP = 0;
+  }
+
+  // ACTION button: throw → grab → punch, in that priority
+  actorAction(P) {
+    if (P.throwT > 0 || P.carrier) return 'none';
+    if (P.carry) {
+      P.throwCarried();
+      if (P === this.player) this.sfx('bounce');
+      return 'throw';
+    }
+    const grab = this.nearestActor(P, 1.05);
+    if (grab) {
+      P.grab(grab);
+      if (P === this.player) this.sfx('select');
+      return 'grab';
+    }
+    P.punchT = 14;
+    const hit = this.nearestActor(P, 1.35);
+    if (hit) {
+      const dir = Math.sign(hit.pos.x - P.pos.x) || 1;
+      hit.shove(dir * 5.2, -2.2);
+      if (P === this.player) this.sfx('hit');
+      return 'punch';
+    }
+    if (P === this.player) this.sfx('spin');
+    return 'punch';
+  }
+
   // ---- survival (Bumper Arena) ------------------------------------------
   // No flag, no rivals: the ring closes, the waves escalate, and every hit
   // costs a heart on top of the knockback. Out of the ring = over; hearts
@@ -368,10 +422,17 @@ export default class Game {
     this.ringR = ARENA.ringR(t);
     this.course.ringR = this.ringR;
     this.runs.forEach((run, i) => {
-      const f = fl[i] || fl[0];
       if (run.out) return;
-      if (f.spin && i === 0) this.sfx('spin');
-      run.P.step(f);
+      const P = run.P;
+      const f = fl[i] || fl[0];
+      // carried co-op partner: ride along, mash to escape
+      if (P.carrier) {
+        P.step({ ...f, x: 0, z: 0, spin: false });
+        if (f.spin) P.struggle();
+        return;
+      }
+      P.step({ ...f, spin: false });     // action button is not the spin attack here
+      if (f.spin) this.actorAction(P);
     });
     this.world.step();
 
@@ -390,12 +451,14 @@ export default class Game {
         if (res === 'hit') { if (first) this.sfx('hit'); }
         else if (res === 'dead') {
           run.out = true;
+          this.releaseHeld(P);
           P.body.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
           if (first) { this.sfx('die'); this.sfx('gameover'); }
         }
       }
       if (!run.out && (Math.hypot(p.x, p.z) > this.ringR - 0.1 || p.y < -4)) {
         run.out = true;
+        this.releaseHeld(P);
         P.body.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
         if (first) { this.sfx('fall'); this.sfx('gameover'); }
       }
@@ -429,10 +492,20 @@ export default class Game {
     this.runs.forEach((run, i) => {
       const f = fl[i] || fl[0];
       if (run.out) return;               // out = parked, no more input
-      if (f.spin && i === 0) this.sfx('spin');
-      run.P.step({ ...f, z: f.z || 0 });
+      const P = run.P;
+      // carried: ride along; jump/action mashing breaks the hold
+      if (P.carrier) {
+        P.step({ ...f, x: 0, z: 0, spin: false });
+        if (f.spin) P.struggle();
+        return;
+      }
+      P.step({ ...f, spin: false });     // action button, not the spin attack
+      if (f.spin) this.actorAction(P);
     });
-    for (const r of this.rivals) r.stepCrates(this.course, this.frame);
+    for (const r of this.rivals) {
+      r.stepCrates(this.course, this.frame, this.actorTargets());
+      if (r.out && r.player.carry) this.releaseHeld(r.player);
+    }
     this.world.step();
     this.cratesLeft = this.course.crates.filter((k) => !k.sunk).length;
 
@@ -442,6 +515,7 @@ export default class Game {
       const p = run.P.pos;
       if (p.y < CRATES.drown) {
         run.out = true;
+        this.releaseHeld(run.P);
         run.P.body.setNextKinematicTranslation({ x: p.x, y: -40, z: p.z });
         if (run === this.runs[0]) this.sfx('fall');
       }

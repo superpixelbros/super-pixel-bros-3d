@@ -404,7 +404,7 @@ export class Renderer {
         2.9, 3.7, course.finishZ + 1.4);
     }
 
-    this.crateLife = [];           // animated sea props (Crate Cove only)
+    this.ambient = [];           // animated ambient props (every stage)
     for (const d of course.decor) {
       if (d.kind === 'palm') {
         const g = new THREE.Group();
@@ -439,7 +439,7 @@ export class Renderer {
         g.add(body, band, lamp);
         g.position.set(d.x, -1.42, d.z);
         this.courseGroup.add(g);
-        this.crateLife.push({ kind: 'buoy', mesh: g, baseY: -1.42, ph: d.ph || 0 });
+        this.ambient.push({ kind: 'buoy', mesh: g, baseY: -1.42, ph: d.ph || 0 });
       } else if (d.kind === 'pier') {
         const g = new THREE.Group();
         const deck = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.22, 1.6), wood);
@@ -471,7 +471,7 @@ export class Renderer {
         g.add(hull, seat);
         g.position.set(d.x, -1.5, d.z);
         this.courseGroup.add(g);
-        this.crateLife.push({ kind: 'boat', mesh: g, baseY: -1.5, ph: d.ph || 0 });
+        this.ambient.push({ kind: 'boat', mesh: g, baseY: -1.5, ph: d.ph || 0 });
       } else if (d.kind === 'lighthouse') {
         const g = new THREE.Group();
         const tower = new THREE.Mesh(
@@ -489,7 +489,7 @@ export class Renderer {
         g.add(tower, stripe, cap, light);
         g.position.set(d.x, -1.7, d.z);
         this.courseGroup.add(g);
-        this.crateLife.push({ kind: 'lighthouse', light, ph: 0 });
+        this.ambient.push({ kind: 'lighthouse', light, ph: 0 });
       } else if (d.kind === 'stack') {
         const s = new THREE.Mesh(
           new THREE.DodecahedronGeometry(1.2 * (d.s || 1)), rock);
@@ -508,7 +508,7 @@ export class Renderer {
         g.add(pole, flame);
         g.position.set(d.x, 0.8, d.z);      // stands on the deck plate
         this.courseGroup.add(g);
-        this.crateLife.push({ kind: 'torch', flame, ph: (d.x + d.z) * 0.7 });
+        this.ambient.push({ kind: 'torch', flame, ph: (d.x + d.z) * 0.7 });
       } else if (d.kind === 'gull') {
         const g = new THREE.Group();
         const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.16),
@@ -522,7 +522,7 @@ export class Renderer {
         g.add(body, wingL, wingR);
         g.position.set(0, d.h || 9, 0);
         this.courseGroup.add(g);
-        this.crateLife.push({ kind: 'gull', mesh: g, wingL, wingR,
+        this.ambient.push({ kind: 'gull', mesh: g, wingL, wingR,
           r: d.r || 14, h: d.h || 9, ph: d.ph || 0 });
       } else if (d.kind === 'drift') {
         const g = new THREE.Group();
@@ -533,7 +533,198 @@ export class Renderer {
         g.add(log);
         g.position.set(d.x, -1.5, d.z);
         this.courseGroup.add(g);
-        this.crateLife.push({ kind: 'drift', mesh: g, baseY: -1.5, ph: d.ph || 0 });
+        this.ambient.push({ kind: 'drift', mesh: g, baseY: -1.5, ph: d.ph || 0 });
+      } else if (d.kind === 'fern' || d.kind === 'flower') {
+        // swaying ground greenery (Ridge stages)
+        const g = new THREE.Group();
+        const leafC = d.kind === 'flower' ? 0x3f9d4e : 0x4fae4a;
+        for (let i = 0; i < (d.kind === 'flower' ? 3 : 6); i++) {
+          const leaf = new THREE.Mesh(
+            new THREE.BoxGeometry(0.46, 0.04, 0.11), mat(leafC));
+          leaf.rotation.y = i * 1.05;
+          leaf.rotation.z = 0.5;
+          leaf.translateY(0.24);
+          leaf.castShadow = true;
+          g.add(leaf);
+        }
+        if (d.kind === 'flower') {
+          for (let i = 0; i < 3; i++) {
+            const stem = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.015, 0.02, 0.36, 5), mat(0x2f7a3a));
+            stem.position.set(Math.cos(i * 2.1) * 0.12, 0.39, Math.sin(i * 2.1) * 0.12);
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6),
+              mat([0xff8fb1, 0xffd23e, 0xc86ad8][i]));
+            head.position.set(stem.position.x, 0.58, stem.position.z);
+            g.add(stem, head);
+          }
+        }
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'sway', mesh: g, ph: d.ph || 0 });
+      } else if (d.kind === 'cactus') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.22, 0.26, (d.h || 2.2), 8), mat(0x3f8f4e));
+        body.position.y = (d.h || 2.2) / 2;
+        body.castShadow = true;
+        g.add(body);
+        for (const s of [-1, 1]) {
+          const arm = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.12, 0.13, 0.7, 6), mat(0x3f8f4e));
+          arm.position.set(s * 0.3, (d.h || 2.2) * 0.55, 0);
+          arm.rotation.z = s * 0.9;
+          g.add(arm);
+        }
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+      } else if (d.kind === 'butterfly') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(0.05, 0.05, 0.16), mat(0x2b2b30));
+        const wl = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.16),
+          mat(d.color || 0xffd23e));
+        wl.position.x = -0.11;
+        const wr = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.16),
+          mat(d.color || 0xffd23e));
+        wr.position.x = 0.11;
+        g.add(body, wl, wr);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'butterfly', mesh: g, wingL: wl, wingR: wr,
+          bx: d.x, bz: d.z, r: d.r || 1.4, h: d.h || 0.9, ph: d.ph || 0 });
+      } else if (d.kind === 'cloud') {
+        const g = new THREE.Group();
+        for (let i = 0; i < 3; i++) {
+          const puff = new THREE.Mesh(new THREE.SphereGeometry(1.3 + i * 0.5, 10, 8),
+            new THREE.MeshLambertMaterial({
+              color: 0xf7fbff, transparent: true, opacity: 0.85,
+            }));
+          puff.position.set(i * 1.3 - 1.2, Math.sin(i) * 0.3, 0);
+          puff.scale.y = 0.55;
+          g.add(puff);
+        }
+        g.position.set(d.x, d.y || 15, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'cloud', mesh: g, speed: d.speed || 0.35,
+          minX: d.minX ?? -30, maxX: d.maxX ?? 30, ph: d.ph || 0 });
+      } else if (d.kind === 'firefly') {
+        const m = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 6),
+          new THREE.MeshLambertMaterial({
+            color: 0xfff2a0, emissive: 0xffd23e,
+          }));
+        m.position.set(d.x, d.y || 1.4, d.z);
+        this.courseGroup.add(m);
+        this.ambient.push({ kind: 'firefly', mesh: m, bx: d.x, bz: d.z,
+          by: d.y || 1.4, r: d.r || 1.1, ph: d.ph || 0 });
+      } else if (d.kind === 'tumbleweed') {
+        const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 1),
+          new THREE.MeshLambertMaterial({ color: 0xa8874f, wireframe: true }));
+        m.position.set(d.x, 0.5, d.z);
+        this.courseGroup.add(m);
+        this.ambient.push({ kind: 'tumbleweed', mesh: m, bx: d.x, bz: d.z,
+          range: d.range || 4, speed: d.speed || 1.4, ph: d.ph || 0 });
+      } else if (d.kind === 'vulture') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.24),
+          mat(0x3a2e28));
+        const wl = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.34), mat(0x2c2320));
+        wl.position.x = -0.7;
+        const wr = wl.clone();
+        wr.position.x = 0.7;
+        g.add(body, wl, wr);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'gull', mesh: g, wingL: wl, wingR: wr,
+          r: d.r || 24, h: d.h || 14, ph: d.ph || 0, slow: true });
+      } else if (d.kind === 'lantern') {
+        const g = new THREE.Group();
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.05, 0.07, 2.2, 6), wood);
+        pole.position.y = 1.1;
+        const arm = new THREE.Mesh(
+          new THREE.BoxGeometry(0.7, 0.06, 0.06), wood);
+        arm.position.set(0.3, 2.1, 0);
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.3, 0.24),
+          new THREE.MeshLambertMaterial({ color: 0xffd9a0, emissive: 0xffb347 }));
+        lamp.position.set(0.58, 1.92, 0);
+        g.add(pole, arm, lamp);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'lantern', mesh: g, ph: d.ph || 0 });
+      } else if (d.kind === 'fish') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.17, 0.34),
+          mat(0xbfe8ff));
+        const tail = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.16, 0.14),
+          mat(0x8fcbe8));
+        tail.position.z = -0.22;
+        g.add(body, tail);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'fish', mesh: g, bx: d.x, bz: d.z,
+          ph: d.ph || 0, speed: d.speed || 0.6 });
+      } else if (d.kind === 'crab') {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6),
+          mat(0xe0523a));
+        body.scale.set(1.2, 0.6, 0.9);
+        for (const s of [-1, 1]) {
+          const claw = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 5),
+            mat(0xc9452f));
+          claw.position.set(s * 0.2, 0.02, 0.12);
+          g.add(claw);
+        }
+        g.add(body);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'crab', mesh: g, bx: d.x, bz: d.z,
+          range: d.range || 0.9, ph: d.ph || 0, y: d.y ?? 0.82 });
+      } else if (d.kind === 'spout') {
+        const m = new THREE.Mesh(new THREE.ConeGeometry(0.28, 2.6, 7, 1, true),
+          new THREE.MeshLambertMaterial({
+            color: 0xeaf6ff, transparent: true, opacity: 0.0,
+          }));
+        m.position.set(d.x, 0, d.z);
+        this.courseGroup.add(m);
+        this.ambient.push({ kind: 'spout', mesh: m, ph: d.ph || 0 });
+      } else if (d.kind === 'banner') {
+        const g = new THREE.Group();
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.04, 0.05, 2.6, 6), mat(0xd8d4c8));
+        pole.position.y = 1.3;
+        const cloth = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.03),
+          mat(d.color || 0xe04a3f));
+        cloth.position.set(0.55, 2.2, 0);
+        g.add(pole, cloth);
+        g.position.set(d.x, 0, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'banner', mesh: cloth, ph: d.ph || 0 });
+      } else if (d.kind === 'balloon') {
+        const g = new THREE.Group();
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8),
+          mat(d.color || 0xff6f91));
+        b.scale.y = 1.15;
+        const str = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 1.4, 4),
+          mat(0xd8d4c8));
+        str.position.y = -0.9;
+        g.add(b, str);
+        g.position.set(d.x, d.y || 5.5, d.z);
+        this.courseGroup.add(g);
+        this.ambient.push({ kind: 'balloon', mesh: g, by: d.y || 5.5, ph: d.ph || 0 });
+      } else if (d.kind === 'spotlight') {
+        const m = new THREE.Mesh(new THREE.ConeGeometry(1.4, 9, 12, 1, true),
+          new THREE.MeshBasicMaterial({
+            color: d.color || 0xfff2c0, transparent: true, opacity: 0.12,
+            side: THREE.DoubleSide,
+          }));
+        m.position.set(d.x || 0, 4.5, d.z || 0);
+        this.courseGroup.add(m);
+        this.ambient.push({ kind: 'spotlight', mesh: m, ph: d.ph || 0 });
+      } else if (d.kind === 'confetti') {
+        const cols = [0xff6f91, 0xffd23e, 0x5ad1ff, 0x7cf07c, 0xc86ad8];
+        for (let i = 0; i < 14; i++) {
+          const m = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 0.05),
+            mat(cols[i % cols.length]));
+          this.courseGroup.add(m);
+          this.ambient.push({ kind: 'confetti', mesh: m, ph: i * 0.37,
+            bx: (i % 7) * 1.4 - 4.2, bz: ((i / 7) | 0) * 1.6 - 0.8 });
+        }
       }
     }
   }
@@ -690,30 +881,118 @@ export class Renderer {
         }
         cm.foam.material.opacity = cm.k.sunk ? 0.16 : 0.55;
       }
-      // cove life: buoys and boats ride the swell, gulls wheel, torches
-      // flicker, the lighthouse sweeps
-      for (const a of this.crateLife || []) {
-        if (a.mesh && a.kind !== 'gull') {
-          a.mesh.position.y = a.baseY + Math.sin(t * 1.3 + a.ph) * 0.09;
-          if (a.kind === 'boat') a.mesh.rotation.z = Math.sin(t * 1.1 + a.ph) * 0.06;
-          if (a.kind === 'drift') a.mesh.rotation.y = Math.sin(t * 0.4 + a.ph) * 0.6;
-        } else if (a.kind === 'gull') {
-          const ang = t * 0.25 + a.ph;
-          a.mesh.position.set(
-            Math.cos(ang) * a.r,
-            a.h + Math.sin(t * 0.8 + a.ph) * 0.5,
-            Math.sin(ang) * a.r);
-          a.mesh.rotation.y = -ang + Math.PI / 2;
-          const flap = Math.sin(t * 9 + a.ph) * 0.5;
-          a.wingL.rotation.z = flap;
-          a.wingR.rotation.z = -flap;
-        } else if (a.kind === 'torch') {
-          const f = 0.9 + Math.sin(t * 9 + a.ph) * 0.18;
-          a.flame.scale.set(f, 1 + Math.sin(t * 13 + a.ph) * 0.15, f);
-          a.flame.rotation.y = t * 2.4;
-        } else if (a.kind === 'lighthouse') {
-          a.light.material.emissiveIntensity =
-            0.35 + Math.max(0, Math.sin(t * 0.9)) * 1.8;
+      // ambient life: every stage has its own moving props
+      for (const a of this.ambient || []) {
+        switch (a.kind) {
+          case 'buoy': case 'boat': case 'drift':
+            a.mesh.position.y = a.baseY + Math.sin(t * 1.3 + a.ph) * 0.09;
+            if (a.kind === 'boat') a.mesh.rotation.z = Math.sin(t * 1.1 + a.ph) * 0.06;
+            if (a.kind === 'drift') a.mesh.rotation.y = Math.sin(t * 0.4 + a.ph) * 0.6;
+            break;
+          case 'gull': {
+            const ang = t * (a.slow ? 0.12 : 0.25) + a.ph;
+            a.mesh.position.set(
+              Math.cos(ang) * a.r,
+              a.h + Math.sin(t * 0.8 + a.ph) * (a.slow ? 0.8 : 0.5),
+              Math.sin(ang) * a.r);
+            a.mesh.rotation.y = -ang + Math.PI / 2;
+            const flap = Math.sin(t * (a.slow ? 3 : 9) + a.ph) * 0.5;
+            a.wingL.rotation.z = flap;
+            a.wingR.rotation.z = -flap;
+            break;
+          }
+          case 'torch': {
+            const f = 0.9 + Math.sin(t * 9 + a.ph) * 0.18;
+            a.flame.scale.set(f, 1 + Math.sin(t * 13 + a.ph) * 0.15, f);
+            a.flame.rotation.y = t * 2.4;
+            break;
+          }
+          case 'lighthouse':
+            a.light.material.emissiveIntensity =
+              0.35 + Math.max(0, Math.sin(t * 0.9)) * 1.8;
+            break;
+          case 'sway':
+            a.mesh.rotation.z = Math.sin(t * 1.6 + a.ph) * 0.07;
+            break;
+          case 'butterfly': {
+            const ang = t * 1.3 + a.ph;
+            a.mesh.position.set(a.bx + Math.cos(ang) * a.r,
+              a.h + Math.sin(t * 2.1 + a.ph) * 0.25,
+              a.bz + Math.sin(ang) * a.r);
+            a.mesh.rotation.y = -ang;
+            const flap = Math.sin(t * 14 + a.ph) * 0.9;
+            a.wingL.rotation.z = 0.4 + flap;
+            a.wingR.rotation.z = -0.4 - flap;
+            break;
+          }
+          case 'cloud':
+            a.mesh.position.x += a.speed * 0.016;
+            if (a.mesh.position.x > a.maxX) a.mesh.position.x = a.minX;
+            break;
+          case 'firefly': {
+            const ang = t * 0.9 + a.ph;
+            a.mesh.position.set(a.bx + Math.cos(ang) * a.r,
+              a.by + Math.sin(t * 2.4 + a.ph) * 0.3,
+              a.bz + Math.sin(ang) * a.r);
+            a.mesh.material.emissiveIntensity =
+              0.6 + Math.max(0, Math.sin(t * 5 + a.ph)) * 1.8;
+            break;
+          }
+          case 'tumbleweed': {
+            const x = a.bx + Math.sin(t * a.speed + a.ph) * a.range;
+            a.mesh.position.set(x,
+              0.5 + Math.abs(Math.sin(t * a.speed * 2 + a.ph)) * 0.15, a.bz);
+            a.mesh.rotation.z = -t * a.speed * 2;
+            a.mesh.rotation.x = t * a.speed;
+            break;
+          }
+          case 'lantern':
+            a.mesh.rotation.z = Math.sin(t * 1.1 + a.ph) * 0.04;
+            break;
+          case 'fish': {
+            const p = (t * a.speed + a.ph) % 2;       // 0..2 s cycle
+            const k = p < 1 ? p : 2 - p;
+            a.mesh.visible = p < 1.35;
+            a.mesh.position.set(a.bx + Math.sin(p * 3.1) * 0.5,
+              -1.4 + Math.sin(Math.min(1, k) * Math.PI) * 1.1,
+              a.bz + (p - 0.65) * 1.2);
+            a.mesh.rotation.x = -0.8 + k * 1.6;
+            break;
+          }
+          case 'crab': {
+            const x = a.bx + Math.sin(t * 0.8 + a.ph) * a.range;
+            a.mesh.position.set(x, a.y, a.bz + Math.cos(t * 0.8 + a.ph) * 0.12);
+            a.mesh.rotation.y = Math.sign(Math.cos(t * 0.8 + a.ph)) * 0.4;
+            break;
+          }
+          case 'spout': {
+            const p = (t * 0.35 + a.ph) % 1;
+            const up = Math.max(0, Math.sin(p * Math.PI * 4)) * 0.9;
+            a.mesh.scale.set(1, Math.max(0.001, up), 1);
+            a.mesh.material.opacity = up * 0.5;
+            a.mesh.position.y = -1.2 + up * 2.6;
+            break;
+          }
+          case 'banner':
+            a.mesh.rotation.z = Math.sin(t * 2.2 + a.ph) * 0.08;
+            a.mesh.rotation.y = Math.sin(t * 1.6 + a.ph) * 0.06;
+            break;
+          case 'balloon':
+            a.mesh.position.y = a.by + Math.sin(t * 0.8 + a.ph) * 0.25;
+            a.mesh.rotation.z = Math.sin(t * 0.6 + a.ph) * 0.05;
+            break;
+          case 'spotlight':
+            a.mesh.rotation.z = Math.sin(t * 0.5 + a.ph) * 0.35;
+            a.mesh.rotation.x = Math.cos(t * 0.37 + a.ph) * 0.2;
+            break;
+          case 'confetti': {
+            const fall = (t * 1.3 + a.ph) % 6;
+            a.mesh.position.set(a.bx + Math.sin(t * 1.2 + a.ph) * 0.4,
+              6.5 - fall, a.bz);
+            a.mesh.rotation.x = t * 2 + a.ph;
+            a.mesh.rotation.z = t * 3 + a.ph;
+            break;
+          }
         }
       }
       for (const hm of this.pendulumMeshes) {
@@ -774,6 +1053,8 @@ export class Renderer {
       } else {
         poseWalk(p, this.heroParts, hp);
       }
+      poseAct(p, this.heroParts);
+      if (p.throwT > 0) hp.rotation.x = (1 - p.throwT / 40) * Math.PI * 2;
     }
 
     // P2 rig (split screen) — same posing rules, own hero
@@ -792,6 +1073,8 @@ export class Renderer {
         if (p2.spinT > 0) g.rotation.y += p2.spinT * 1.4;
         else if (!p2.grounded) poseAir(p2, this.hero2Parts);
         else poseWalk(p2, this.hero2Parts, g);
+        poseAct(p2, this.hero2Parts);
+        if (p2.throwT > 0) g.rotation.x = (1 - p2.throwT / 40) * Math.PI * 2;
       }
     }
 
@@ -819,6 +1102,8 @@ export class Renderer {
         if (p.spinT > 0) g.rotation.y += p.spinT * 1.4;
         else if (!p.grounded) poseAir(p, parts);
         else poseWalk(p, parts, g);
+        poseAct(p, parts);
+        if (p.throwT > 0) g.rotation.x = (1 - p.throwT / 40) * Math.PI * 2;
       }
     }
 
@@ -1028,4 +1313,27 @@ function poseAir(p, parts) {
   parts.legR.rotation.x = 0.35;
   parts.armL.rotation.x = -2.2;                // arms up
   parts.armR.rotation.x = -2.2;
+}
+
+// punch / carry / carried poses (Crate Cove + Arena). Applied AFTER the
+// walk/air pose so the action reads on top of the run cycle.
+function poseAct(p, parts) {
+  if (p.carry) {                               // holding a hero overhead
+    parts.armL.rotation.x = -2.9;
+    parts.armR.rotation.x = -2.9;
+    parts.armL.rotation.z = -0.2;
+    parts.armR.rotation.z = 0.2;
+  } else if (p.punchT > 0) {                   // right cross
+    const k = 1 - p.punchT / 14;
+    parts.armR.rotation.x = -1.6 - Math.sin(k * Math.PI) * 0.7;
+    parts.armR.rotation.z = 0;
+    parts.armL.rotation.x = 0.35;
+  }
+  if (p.carrier) {                             // dangling and flailing
+    const s = Math.sin(p.animT * 2.4) * 0.45;
+    parts.armL.rotation.x = 0.7 + s;
+    parts.armR.rotation.x = 0.7 - s;
+    parts.legL.rotation.x = s * 0.9;
+    parts.legR.rotation.x = -s * 0.9;
+  }
 }

@@ -941,6 +941,54 @@ console.log('two player');
   fg.disposeWorld();
 }
 
+// ---- 14) punch / carry / throw (Crate Cove + Arena) -----------------------
+console.log('carry & throw');
+{
+  const idle = { x: 0, z: 0, jump: false, jumpHeld: false, spin: false };
+  const g = mkGame('hero', 2);
+  g.start(2, { twoPlayer: true, hero2Index: HERO_IDS.indexOf('yas') });
+  const P1 = g.runs[0].P, P2 = g.runs[1].P;
+  const q = P1.pos;
+  P2.body.setTranslation({ x: q.x + 0.5, y: q.y, z: q.z }, true);
+  for (let i = 0; i < 3; i++) g.step([idle, idle]);
+
+  g.step([{ ...idle, spin: true }, idle]);
+  ok(P1.carry === P2 && P2.carrier === P1,
+    'grab: the action button hoists a neighbour');
+  ok(P2.pos.y > P1.pos.y + 0.5,
+    'carry: the carried hero rides the carrier’s head');
+
+  for (let i = 0; i < 6; i++) {
+    g.step([idle, { ...idle, jump: true }]);
+    g.step([idle, idle]);
+  }
+  ok(!P2.carrier, 'escape: mashing jump breaks the hold');
+  ok(P2.stun > 0, 'escape: the escapee stumbles free');
+
+  P2.body.setTranslation({ x: P1.pos.x + 0.4, y: P1.pos.y, z: P1.pos.z }, true);
+  for (let i = 0; i < 3; i++) g.step([idle, idle]);
+  g.step([{ ...idle, spin: true }, idle]);
+  ok(P1.carry === P2, 'grab again for the throw');
+  g.step([{ ...idle, spin: true }, idle]);
+  ok(!P1.carry && !P2.carrier && P2.throwT > 0 && P2.vy > 0,
+    'throw: the action button hurls the carried hero forward + up');
+
+  // punch: a neighbour inside punch reach (outside grab reach) staggers
+  const p1 = P1.pos;
+  P2.body.setTranslation({ x: p1.x + 1.2, y: p1.y, z: p1.z }, true);
+  for (let i = 0; i < 2; i++) g.step([idle, idle]);
+  g.step([{ ...idle, spin: true }, idle]);
+  ok(P2.stun > 0 && !P1.carry, 'punch: a punch staggers a nearby character');
+
+  // rivals fight back: an AI rival grabs a player who lingers
+  const r0 = g.rivals[0];
+  r0.player.body.setTranslation({ x: P1.pos.x + 0.4, y: P1.pos.y, z: P1.pos.z }, true);
+  r0.actT = 0;
+  for (let i = 0; i < 4 && !r0.player.carry; i++) g.step([idle, idle]);
+  ok(r0.player.carry === P1, 'rivals fight back: an AI rival grabs a player');
+  g.disposeWorld();
+}
+
 // ---- done -----------------------------------------------------------------
 if (fails) {
   console.error(`\n${fails} headless check(s) FAILED`);

@@ -376,7 +376,12 @@ async function boot() {
       } else {
         jumpEdge = Input.pressed('Space') || Input.pressed('ArrowUp') || Input.pressed('KeyW');
       }
-      spinEdge = Input.pressed('ArrowDown') || Input.pressed('KeyS') || Input.pressed('ShiftLeft');
+      // free modes (arena + crate cove): Shift / pad □ is the ACTION
+      // button (punch → grab → throw); races keep the full spin attack
+      spinEdge = game.mode === 'race'
+        ? (Input.pressed('ArrowDown') || Input.pressed('KeyS')
+          || Input.pressed('ShiftLeft'))
+        : Input.pressed('ShiftLeft');
       // survival free-control throttle (race auto-run ignores this flag):
       // W/↑ drives toward +Z, S/↓ backs up; the stick feeds analog drive
       // through Gamepad.throttle when nothing is held on the keyboard

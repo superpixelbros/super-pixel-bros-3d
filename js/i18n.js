@@ -9,12 +9,12 @@ const hasDoc = typeof document !== 'undefined';
 const hasLS = typeof localStorage !== 'undefined';
 
 const EN = {
-  'app.title': 'SUPER PIXEL BROS 3D',
+  'app.title': 'PAXALA',
   'tagline': 'RUN · SPIN · STUMBLE',
   'press_enter': 'PRESS ENTER TO START',
   'press_tap': 'TAP TO START',
-  'controls.move': 'ARROWS/WASD MOVE    SPACE JUMP    S SPIN',
-  'controls.actions': 'ESC PAUSE  R RETRY  M SOUND  L LANG',
+  'controls.move': 'ARROWS/WASD MOVE    SPACE JUMP    SHIFT ACTION',
+  'controls.actions': 'ACTION: PUNCH · GRAB · THROW (COVE/ARENA)    ESC PAUSE',
   'input.device': 'INPUT DEVICE',
   'input.keyboard': 'KEYBOARD',
   'input.controller': 'CONTROLLER',
@@ -120,12 +120,12 @@ const EN = {
 };
 
 const AR = {
-  'app.title': 'SUPER PIXEL BROS 3D',
+  'app.title': 'بَكْسَلَة',
   'tagline': 'اركض · دوّر · تعثّر',
   'press_enter': 'اضغط ENTER للبدء',
   'press_tap': 'انقر للبدء',
-  'controls.move': 'تحرّك بالأسهم/WASD    اقفز بـ SPACE    دوّر بـ S',
-  'controls.actions': 'ESC إيقاف  R إعادة  M صوت  L لغة',
+  'controls.move': 'تحرّك بالأسهم/WASD    اقفز بـ SPACE    اضغط SHIFT للحركة',
+  'controls.actions': 'الحركة: لكمة · حمل · رمي (الخليج/الحلبة)    ESC إيقاف',
   'input.device': 'جهاز التحكم',
   'input.keyboard': 'لوحة المفاتيح',
   'input.controller': 'يد التحكم',

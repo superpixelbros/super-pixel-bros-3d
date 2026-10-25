@@ -19,7 +19,7 @@ export class UI {
     this.root.innerHTML = `
       <div class="screen" id="sc-title">
         <div class="panel center grow">
-          <h1 class="logo">SUPER <span>PIXEL</span> BROS <em>3D</em></h1>
+          <h1 class="logo">PAX<span>ALA</span></h1>
           <p class="tagline" data-key="tagline"></p>
           <button class="btn big" id="b-start" data-key="press_enter"></button>
           <p class="keys"><span data-key="controls.move"></span></p>
