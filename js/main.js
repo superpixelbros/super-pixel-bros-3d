@@ -8,7 +8,7 @@ import { measure, view } from './view.js';
 import { applyLang, toggleLang, t } from './i18n.js';
 import { initPhysics, STEP } from './phys.js';
 import Game from './game.js';
-import { LEVELS, ARENA, CRATES } from './levels.js';
+import { LEVELS, ARENA, CRATES, PAC } from './levels.js';
 import { HERO_IDS, stepHeroGrid } from './hero.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
@@ -17,6 +17,7 @@ import audio from './audio.js';
 const STEP_MS = STEP * 1000;
 const PROGRESS_KEY = 'pixelbros3d_progress';
 const BEST_KEY = 'pixelbros3d_arena_best';   // survival record (ARENA.dur = win)
+const PAC_BEST_KEY = 'pixelbros3d_pac_best'; // Ghost Maze fastest full clear
 const INPUT_KEY = 'pixelbros3d_input';       // 'keyboard' | 'controller'
 
 async function boot() {
@@ -38,6 +39,11 @@ async function boot() {
   let survBest = 0;
   let survSaved = true;          // one-shot per survival run
   try { survBest = parseFloat(localStorage.getItem(BEST_KEY)) || 0; } catch { /* */ }
+  // Ghost Maze best: the FASTEST full-board clear (lowest wins), unlike the
+  // arena where you survive as long as possible. 0 = never cleared.
+  let pacBest = 0;
+  let pacSaved = true;           // one-shot per maze run
+  try { pacBest = parseFloat(localStorage.getItem(PAC_BEST_KEY)) || 0; } catch { /* */ }
   // input device (title-screen segment): keyboard is the default — the pad
   // never drives until the player opts in; controller mode keeps the
   // keyboard alive too, so a dead pad battery can never lock anyone out
@@ -64,6 +70,13 @@ async function boot() {
     if (t <= survBest) return false;
     survBest = t;
     try { localStorage.setItem(BEST_KEY, String(t)); } catch { /* */ }
+    return true;
+  };
+  // the maze record runs the OTHER way — a quicker full clear wins
+  const savePacBest = (t) => {
+    if (pacBest > 0 && t >= pacBest) return false;
+    pacBest = t;
+    try { localStorage.setItem(PAC_BEST_KEY, String(t)); } catch { /* */ }
     return true;
   };
 
@@ -194,6 +207,10 @@ async function boot() {
       ui.setMap(c + 1, t(lvl.nameKey), false, { arena: true, best: survBest });
       return;
     }
+    if (lvl.mode === 'pac') {
+      ui.setMap(c + 1, t(lvl.nameKey), false, { pac: true, best: pacBest });
+      return;
+    }
     ui.setMap(c + 1, t(lvl.nameKey), c < game.frontier);
   }
   // select-screen hero picking: pass 0 edits P1, pass 1 edits P2.
@@ -230,6 +247,12 @@ async function boot() {
   function hud2Update() {
     const P2 = game.players[1];
     const r2 = game.runs[1];
+    if (game.mode === 'pac') {
+      ui.hud2(t('hud.pac.dots', { n: r2.dots, q: PAC.quota }),
+        t('hud.pac.time', { t: mmss(PAC.dur - game.timeF / 60) }),
+        t('hud.pac.left', { n: game.dotsLeft }));
+      return;
+    }
     if (game.mode === 'crates') {
       ui.hud2(t('hud.crates', { n: game.cratesLeft }), mmss(game.timeF / 60), '');
       return;
@@ -249,6 +272,10 @@ async function boot() {
   }
   function dualState() {
     if (!game.runs || game.runs.length < 2) return '';
+    if (game.mode === 'pac') {              // personal quotas on a shared board
+      return `${t('p1')} ${game.runs[0].dots}/${PAC.quota} · ` +
+        `${t('p2')} ${game.runs[1].dots}/${PAC.quota}`;
+    }
     const st = (run) => run.out ? t('state.out') : t('state.dry');
     return `${t('p1')} ${st(game.runs[0])} · ${t('p2')} ${st(game.runs[1])}`;
   }
@@ -266,7 +293,8 @@ async function boot() {
     assignSlots();
     game.start(levelIndex, { twoPlayer, hero2Index: game.hero2Index });
     survSaved = false;           // fresh survival attempt: arm the best-save
-    ui.modeCards(game.mode);     // arena vs crate-cove wording on the cards
+    pacSaved = false;            // fresh maze attempt too
+    ui.modeCards(game.mode);     // arena vs cove vs maze wording on the cards
     ui.setPlayers(twoPlayer ? 2 : 1, canTwo(), Gamepad.padCount());
     document.body.classList.toggle('split-v', twoPlayer && splitMode === 'v');
     document.body.classList.toggle('split-h', twoPlayer && splitMode === 'h');
@@ -274,6 +302,7 @@ async function boot() {
     renderer.setP2Hero(twoPlayer ? game.selectedHero2() : null);
     renderer.buildCourse(game.course);
     renderer.setRivals(game.rivals);
+    renderer.setGhosts(game.ghosts);   // [] outside the maze — group stays empty
     renderer.setHero('play:' + game.selectedHero());
     ui.show('play');
     audio.setTheme(levelIndex);
@@ -304,6 +333,20 @@ async function boot() {
   // A Crate Cove win is simply a cleared frontier stage: walk onward.
   function winDone() {
     if (game.mode === 'crates') { handleDone(); return; }
+    if (game.mode === 'pac') {
+      // challenge node: the board is the prize — straight back to the map,
+      // never a frontier step, never the trophy path. enterMap disposes the
+      // run world AND flips state to 'map' — skipping that flip left every
+      // key routed to the dead 'win' card and the pad could never leave.
+      audio.sfx('confirm');
+      game.enterMap(false);
+      const pacIdx = LEVELS.findIndex((l) => l.id === 'pac');
+      if (pacIdx >= 0) game.map.cursor = pacIdx;   // land on your own node
+      renderer.setHero('map:' + game.selectedHero());
+      ui.show('map');
+      updateMapUI();
+      return;
+    }
     if (game.claimVictory() === 'victory') {
       audio.sfx('trophy');
       ui.show('victory');
@@ -313,6 +356,24 @@ async function boot() {
       ui.show('map');
       updateMapUI();
     }
+  }
+
+  // Ghost Maze scoreboard + final standings rows: humans first (dots against
+  // their personal quota), then the AI runners (munch count, capped at aiCap).
+  // Each chip carries that runner's model colour, so every line maps back to
+  // the figure on the board. sorted=true ranks best-first — Array.sort is
+  // stable and humans sit first in the array, so ties favour them.
+  function pacScoreboard(sorted = false) {
+    const rows = game.runs.map((run, i) => ({
+      label: t(i === 1 ? 'p2' : 'p1'),
+      color: run.P.def.color, dots: run.dots, quota: PAC.quota,
+    }));
+    game.rivals.forEach((r, i) => rows.push({
+      label: `${t('hud.pac.cpu')} ${i + 1}`,
+      color: r.player.def.color, dots: r.eaten,
+    }));
+    if (sorted) rows.sort((a, b) => b.dots - a.dots);
+    return rows;
   }
 
   // edge-triggered flags must fire exactly once even when a slow frame
@@ -419,7 +480,12 @@ async function boot() {
     } else if (s === 'victory') {
       if (Input.pressed('Enter')) toTitle();
     } else if (s === 'over') {
-      if (Input.pressed('Enter')) startLevel(game.levelIndex);
+      // the maze's defeat card walks straight out to the map (R retries);
+      // every other stage keeps Enter = retry on its over card
+      if (Input.pressed('Enter')) {
+        if (game.mode === 'pac') winDone();
+        else startLevel(game.levelIndex);
+      }
       if (Input.pressed('KeyQ') || Input.pressed('Escape')) toTitle();
     } else if (s === 'win') {
       if (Input.pressed('Enter')) winDone();
@@ -509,6 +575,9 @@ async function boot() {
       if (game.mode === 'survival') {
         ui.hudSurvive(game.timeF / 60, game.wave, ARENA.dur,
           game.player.hp, game.player.maxHp);
+      } else if (game.mode === 'pac') {
+        ui.hudPac(game.timeF / 60, pacScoreboard(), game.dotsLeft, PAC.dur,
+          game.course.pac.powerT);
       } else if (game.mode === 'crates') {
         ui.hudCrates(game.timeF / 60, game.cratesLeft);
       } else {
@@ -537,22 +606,33 @@ async function boot() {
         : '');
     }
     if (game.state === 'over' || game.state === 'win') {
-      // the arena keeps a best time; the cove only keeps bragging rights
+      // the arena keeps a best time; the cove only keeps bragging rights;
+      // the maze records the fastest FULL clear — wins only, quicker is better
       if (game.mode === 'survival' && !survSaved) {
         survSaved = true; saveSurvBest(game.survTime);
+      }
+      if (game.mode === 'pac' && game.state === 'win' && !pacSaved) {
+        pacSaved = true; savePacBest(game.survTime);
       }
     }
     if (game.state === 'over') {
       ui.show('over');
       ui.overStats(game.survTime, game.mode === 'survival' ? survBest : 0);
+      ui.pacStandings('over', game.mode === 'pac' ? pacScoreboard(true) : null);
       ui.dual('over', twoPlayer ? dualState() : '');
     }
     if (game.state === 'win') {
       ui.show('win');
       if (game.mode === 'crates') ui.winCrates();
+      else if (game.mode === 'pac') ui.winPac(pacBest);
       else ui.winStats(survBest, game.allRacesCleared());
+      ui.pacStandings('win', game.mode === 'pac' ? pacScoreboard(true) : null);
       ui.dual('win', twoPlayer ? dualState() : '');
     }
+
+    // Ghost Maze: hold C pulls the camera out to the full-board fit view
+    renderer.peek = game.state === 'play' && game.mode === 'pac'
+      && Input.isDown('KeyC');
 
     renderer.sync(game, game.state);
     renderer.render();

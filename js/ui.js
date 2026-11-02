@@ -9,6 +9,10 @@ import { FIELD_SIZE } from './rivals.js';
 const heroColorCss = (id) =>
   '#' + CHARACTERS[id].color.toString(16).padStart(6, '0');
 
+// a numeric 0xRRGGBB → '#rrggbb' for chips built from live def colours
+const numColorCss = (n) =>
+  '#' + ((n >>> 0) & 0xffffff).toString(16).padStart(6, '0');
+
 export class UI {
   constructor(root, cb) {
     this.root = root;
@@ -149,6 +153,7 @@ export class UI {
           <p class="result" id="over-time"></p>
           <p class="result" id="over-best"></p>
           <p class="result" id="over-dual"></p>
+          <div class="ranks" id="ranks-over"></div>
           <div class="col">
             <button class="btn big accent" id="b-over-retry" data-key="over.retry"></button>
             <button class="btn ghost" id="b-over-title" data-key="pause.quit"></button>
@@ -164,6 +169,7 @@ export class UI {
           <p class="trophy-sub" data-key="win.sub"></p>
           <p class="result" id="win-best"></p>
           <p class="result" id="win-dual"></p>
+          <div class="ranks" id="ranks-win"></div>
           <p class="blurb" id="win-locked" data-key="win.locked"></p>
           <button class="btn big accent" id="b-win-title" data-key="win.hint_map"></button>
         </div>
@@ -472,7 +478,71 @@ export class UI {
     w.textContent = t('hud.crates', { n: cratesLeft });
   }
 
-  // Crate Cove win card: no best-time row, no locked trophy line — the
+  // Ghost Maze HUD. Clock counts DOWN to PAC.dur. The coins slot becomes a
+  // live scoreboard — one line per active runner (human P1/P2 first, then the
+  // AI runners), each with a colour chip + score; humans read dots/quota,
+  // rivals just their munch count. The wave slot carries how many dots are
+  // left on the shared board; a 👻 timer fills the place slot during a power
+  // flip. Hearts play no part here — warp is the only punishment.
+  hudPac(timeSec, runners, left, dur, frightRem = 0) {
+    const r = this.root;
+    const coins = r.querySelector('#hud-coins');
+    coins.style.visibility = 'visible';
+    coins.innerHTML = (runners || []).map((e) => `
+      <div class="score-row">
+        <i class="chip" style="background:${numColorCss(e.color)}"></i>
+        <span class="who">${e.label}</span>
+        <b>${e.dots}${e.quota ? '/' + e.quota : ''}</b>
+      </div>`).join('');
+    r.querySelector('#hud-hearts').style.visibility = 'hidden';
+    const timeEl = r.querySelector('#hud-time');
+    const rem = dur - timeSec;
+    timeEl.textContent = t('hud.pac.time', { t: fmtTime(Math.max(0, rem)) });
+    timeEl.classList.toggle('warn', rem <= dur * 0.25 && rem > dur * 0.1);
+    timeEl.classList.toggle('crit', rem <= dur * 0.1);
+    const w = r.querySelector('#hud-wave');
+    w.style.visibility = 'visible';
+    w.textContent = t('hud.pac.left', { n: left });
+    const place = r.querySelector('#hud-place');
+    if (frightRem > 0) {
+      place.style.visibility = 'visible';
+      place.textContent = t('hud.pac.power', { t: Math.ceil(frightRem / 60) });
+    } else place.style.visibility = 'hidden';
+  }
+
+  // Final standings for the maze end cards: rows sorted best-first, leader
+  // gets a 🏆 and a gold highlight. Same chips as the live HUD so you can tie
+  // each line back to the runner on the board.
+  pacRanks(rows) {
+    return (rows || []).map((e, i) => `
+      <div class="rank-row${i === 0 ? ' lead' : ''}">
+        ${i === 0 ? '<span class="cup">🏆</span>' : '<span class="cup dim">·</span>'}
+        <i class="chip" style="background:${numColorCss(e.color)}"></i>
+        <span class="who">${e.label}</span>
+        <b>${e.dots}${e.quota ? '/' + e.quota : ''}</b>
+      </div>`).join('');
+  }
+
+  // Pour standings into an end card ('' clears — the over/win cards are shared
+  // by every mode, so non-maze runs must not inherit last maze's rows)
+  pacStandings(which, rows) {
+    this.root.querySelector('#ranks-' + which).innerHTML =
+      rows ? this.pacRanks(rows) : '';
+  }
+
+  // pac win card: the best clear-time rides the line, no locked-trophy row —
+  // eating the board IS the prize (and never a frontier step)
+  winPac(bestSec) {
+    const r = this.root;
+    r.querySelector('#win-best').textContent =
+      bestSec > 0 ? t('over.best', { t: fmtTime(bestSec) }) : '';
+    r.querySelector('#win-locked').style.display = 'none';
+    const b = r.querySelector('#b-win-title');
+    b.dataset.key = 'win.hint_map';
+    b.textContent = t('win.hint_map');
+  }
+
+  // Arena vs Crate Cove win card: no best-time row, no locked trophy line — the
   // button simply walks onward to the arena island
   winCrates() {
     const r = this.root;
@@ -483,8 +553,9 @@ export class UI {
     b.textContent = t('clear.hint_next');
   }
 
-  // Arena vs Crate Cove share the over/win cards — swap the flavour line
-  // (data-key included, so language toggles keep the right wording)
+  // Arena, Crate Cove and the Ghost Maze share the over/win cards — swap the
+  // titles, flavour lines and even the splash mark (data-key included, so
+  // language toggles keep the right wording)
   modeCards(mode) {
     const set = (sel, key) => {
       const el = this.root.querySelector(sel);
@@ -492,9 +563,16 @@ export class UI {
       el.dataset.key = key;
       el.textContent = t(key);
     };
+    const pac = mode === 'pac';
     const crates = mode === 'crates';
-    set('#sc-over .blurb', crates ? 'over.sub.crates' : 'over.sub');
-    set('#sc-win .trophy-sub', crates ? 'win.sub.crates' : 'win.sub');
+    set('#sc-over h2', pac ? 'over.title.pac' : 'over.title');
+    set('#sc-over .blurb',
+      pac ? 'over.sub.pac' : crates ? 'over.sub.crates' : 'over.sub');
+    const mark = this.root.querySelector('#sc-over .dq-mark');
+    if (mark) mark.textContent = pac ? '👻' : '🌊';
+    set('#sc-win h2', pac ? 'win.title.pac' : 'win.title');
+    set('#sc-win .trophy-sub',
+      pac ? 'win.sub.pac' : crates ? 'win.sub.crates' : 'win.sub');
   }
 
   // win card: the trophy gleams only once the race ladder is done — until
@@ -534,16 +612,22 @@ export class UI {
   }
 
   setMap(num, name, cleared, opts = {}) {
+    // challenge nodes (arena + Ghost Maze) trade the stage counter for their
+    // own marquee and a best-time line
     this.root.querySelector('#map-stage').textContent =
-      opts.arena ? t('level.arena') : t('map.stage', { n: num, name });
+      opts.pac ? t('level.pac')
+        : opts.arena ? t('level.arena')
+          : t('map.stage', { n: num, name });
+    const bestLine = opts.best > 0
+      ? t('over.best', { t: fmtTime(opts.best) }) : '';
     this.root.querySelector('#map-state').textContent =
-      opts.arena
-        ? (opts.best > 0 ? t('over.best', { t: fmtTime(opts.best) })
-          : t('map.arena'))
-        : (cleared ? t('map.cleared') : t('map.frontier'));
-    // free-control explainer instead of the race hint while on the arena
+      opts.pac ? (bestLine || t('map.pac'))
+        : opts.arena ? (bestLine || t('map.arena'))
+          : (cleared ? t('map.cleared') : t('map.frontier'));
+    // free-control explainer instead of the race hint while on a challenge
     const b = this.root.querySelector('#sc-map .keys');
-    b.dataset.key = opts.arena ? 'map.arenaHint' : 'map.hint';
+    b.dataset.key = opts.pac ? 'map.pacHint'
+      : opts.arena ? 'map.arenaHint' : 'map.hint';
     b.textContent = t(b.dataset.key);
   }
 }

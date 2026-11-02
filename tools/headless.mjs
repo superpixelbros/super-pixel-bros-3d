@@ -15,7 +15,8 @@ import Game from '../js/game.js';
 import {
   LEVELS, hazardTouch, windAt, courseStep, makeHammer, makePendulum,
   makeRoller, makePiston, makeCrumble, makeBounce, makeWind, ARENA,
-  CRATES, buildCrates, crateStep,
+  CRATES, buildCrates, crateStep, PAC, isChallenge,
+  pacCellAt, pacCenter, pacNeighbours, pacDistField,
 } from '../js/levels.js';
 import { Player, HERO_IDS, CHARACTERS, stepHeroGrid } from '../js/hero.js';
 import { crateHop } from '../js/rivals.js';
@@ -1036,9 +1037,309 @@ console.log('carry & throw');
   g.disposeWorld();
 }
 
+// ---- 15) ghost maze ---------------------------------------------------------
+console.log('ghost maze');
+{
+  const PCL = LEVELS.findIndex((l) => l.id === 'pac');
+  const NOGO = { x: 0, z: 0, jump: false, jumpHeld: false, spin: false };
+  ok(PCL >= 0 && isChallenge(LEVELS[PCL]) && LEVELS[PCL].mode === 'pac',
+    "the Ghost Maze registers as an always-open challenge node ('pac')");
+
+  // -- grid contract ----------------------------------------------------------
+  const pg = mkGame('hero', PCL);
+  ok(pg.mode === 'pac' && pg.player.free && !pg.player.autoRun &&
+    pg.course.jumpZones.length === 0,
+    'maze: flat free-control floor — no auto-run, nothing to jump');
+  ok(pg.ghosts.length === 4 && pg.rivals.length === 3 && pg.players.length === 1,
+    'field: you + three AI runners + four spirits');
+  const rows = pg.course.pac.rows;
+  const cols0 = rows[0].length;
+  const flat = (x) => ('S.Ppg'.includes(x) ? '.' : x);
+  let widthsOK = true, mirrorOK = true;
+  for (const row of rows) {
+    if (row.length !== cols0) widthsOK = false;
+    for (let j = 0; j < Math.floor(cols0 / 2); j++) {
+      if (flat(row[j]) !== flat(row[cols0 - 1 - j])) mirrorOK = false;
+    }
+  }
+  ok(widthsOK, 'maze grid: every row the same width');
+  ok(mirrorOK, 'maze grid: left/right mirror-symmetric (pads excepted)');
+  let si = -1, sj = -1;
+  rows.forEach((r, i) => { const j = r.indexOf('S'); if (j >= 0) { si = i; sj = j; } });
+  const seen = rows.map((r) => r.split('').map(() => false));
+  const stack = [[si, sj]];
+  seen[si][sj] = true;
+  while (stack.length) {
+    const [i, j] = stack.pop();
+    for (const [a, b] of pacNeighbours(pg.course, i, j)) {
+      if (seen[a][b]) continue;
+      seen[a][b] = true;
+      stack.push([a, b]);
+    }
+  }
+  let unreach = 0;
+  rows.forEach((r, i) => [...r].forEach((ch, j) => {
+    if (ch !== '#' && !seen[i][j]) unreach++;
+  }));
+  ok(unreach === 0, 'maze flood-fill: every corridor cell reachable from the spawn');
+  ok(pg.course.pac.orbs.length === 4, 'four power orbs seeded');
+  const TOTAL = pg.course.pac.dots.length;
+  ok(TOTAL >= 2 * PAC.quota + 3 * PAC.aiCap,
+    `law: ${TOTAL} dots can feed both quotas AND every capped appetite`);
+
+  // challenge node reachability on the diorama (frontier be damned)
+  const mp = new Game(R);
+  mp.enterMap(false);
+  for (let k = 0; k < 6; k++) mp.mapMove(1);
+  ok(mp.map.cursor === PCL, 'the Ghost Maze node is always open on the map');
+  mp.disposeWorld();
+  pg.disposeWorld();
+
+  // -- geometry bots: every hero must eat the ENTIRE board, death-free --------
+  const botClear = (id) => {
+    const gg = mkGame(id, PCL);
+    gg.ghostsOff = true;                                // spirits get their own tests
+    for (const u of gg.course.pac.orbs) u.taken = true; // keep the flip quiet
+    let tgt = null;                                     // cached BFS dot target
+    for (let i = 0; i < PAC.dur * 60 && gg.state === 'play'; i++) {
+      const P = gg.player;
+      if (!tgt || gg.course.pac.dotAt[tgt.i][tgt.j].taken) {
+        tgt = null;
+        let bd = 1e9;
+        const c0 = pacCellAt(gg.course, P.pos.x, P.pos.z);
+        const fd0 = pacDistField(gg.course, c0.i, c0.j);
+        for (const d of gg.course.pac.dots) {
+          if (!d.taken && fd0[d.i][d.j] < bd) { bd = fd0[d.i][d.j]; tgt = d; }
+        }
+      }
+      let x = 0, z = 0;
+      if (tgt) {                       // downhill on the field from the target
+        const c = pacCellAt(gg.course, P.pos.x, P.pos.z);
+        const fd = pacDistField(gg.course, tgt.i, tgt.j);
+        let best = null;
+        for (const [a, b] of pacNeighbours(gg.course, c.i, c.j)) {
+          if (!best || fd[a][b] < fd[best[0]][best[1]]) best = [a, b];
+        }
+        if (best) {
+          const ct = pacCenter(gg.course, best[0], best[1]);
+          const dx = ct.x - P.pos.x, dz = ct.z - P.pos.z;
+          const dl = Math.hypot(dx, dz) || 1;
+          x = dx / dl; z = dz / dl;
+        }
+      }
+      gg.step({ x, z, jump: false, jumpHeld: false, spin: false });
+    }
+    return gg;
+  };
+  const pacTimes = [];
+  for (const id of HERO_IDS) {
+    const cg = botClear(id);
+    ok(cg.state === 'win' && cg.dotsLeft === 0 && cg.runs[0].deaths === 0,
+      `${id} eats the ENTIRE board death-free (${cg.runs[0].dots}/${TOTAL} personal dots` +
+      `, ${cg.survTime?.toFixed(1)}s)`);
+    ok(cg.rivals.every((r) => r.eaten <= PAC.aiCap),
+      `${id}: rival appetites never exceed the cap (max ${Math.max(...cg.rivals.map((r) => r.eaten))})`);
+    pacTimes.push(cg.survTime);
+    cg.disposeWorld();
+  }
+  const slow = Math.max(...pacTimes);
+  ok(PAC.dur >= 1.6 * slow,
+    `clock calibration: PAC.dur=${PAC.dur}s ≥ 1.6× the slowest full clear (${slow.toFixed(1)}s)`);
+
+  // -- live sim with spirits: monotonic board, nobody flies apart -------------
+  const lg = mkGame('hero', PCL);
+  let mono = true, finite = true, prevLeft = lg.dotsLeft;
+  for (let i = 0; i < 60 * 110 && lg.state === 'play'; i++) {
+    lg.step(NOGO);                    // a do-nothing human; the maze runs itself
+    if (lg.dotsLeft > prevLeft) mono = false;
+    prevLeft = lg.dotsLeft;
+    for (const b of [lg.player.pos, ...lg.ghosts.map((g) => g.pos),
+      ...lg.rivals.map((r) => r.pos)]) {
+      if (!Number.isFinite(b.x + b.y + b.z)) finite = false;
+    }
+  }
+  ok(mono, 'live sim: the board never un-eats (dots count is monotonic)');
+  ok(finite, 'live sim: every runner and spirit stays in the world');
+  ok(prevLeft < TOTAL,
+    'AI runners keep munching even while hunted — the board drains itself');
+  ok(lg.runs[0].deaths > 0, 'a motionless runner gets caught and warped a few times');
+  lg.disposeWorld();
+
+  // -- the warp contract: caught → start pad, progress kept, mercy observed --
+  const cw = mkGame('hero', PCL);
+  for (const u of cw.course.pac.orbs) u.taken = true;           // no surprise flips
+  cw.ghosts.forEach((g, k) => { if (k > 0) g.poofT = 1e9; });   // bench three spirits
+  const gh = cw.ghosts[0];
+  const spot = cw.course.pac.dots.find((d) => d.i === 11 && d.j === 8);
+  cw.player.body.setTranslation({ x: spot.x, y: 1.0, z: spot.z }, true);
+  gh.player.body.setTranslation({ x: spot.x + 0.4, y: 1.0, z: spot.z }, true);
+  gh.to = null;                                     // start a fresh leg here
+  cw.player.vy = 0; gh.player.vy = 0;
+  const d0 = cw.runs[0].deaths;
+  for (let i = 0; i < 120 && cw.runs[0].deaths === d0 && cw.state === 'play'; i++) {
+    cw.step(NOGO);
+  }
+  ok(cw.runs[0].deaths > d0, 'a spirit touching a runner ends in a WARP');
+  const pad0 = cw.course.spawnPads[0];
+  ok(Math.hypot(cw.player.pos.x - pad0[0], cw.player.pos.z - pad0[1]) < 2.6,
+    'the warp drops them back on their START pad');
+  ok(cw.runs[0].dots >= 1 && cw.course.pac.dots.some((d) => d.taken),
+    'eaten dots stay eaten through the warp (it steals time, not progress)');
+  // mercy: park the spirit right beside the respawned runner
+  gh.player.body.setTranslation(
+    { x: cw.player.pos.x + 0.4, y: 1.0, z: cw.player.pos.z }, true);
+  gh.to = null;                                     // forget the old leg
+  const dMid = cw.runs[0].deaths;
+  for (let i = 0; i < 25 && cw.state === 'play'; i++) cw.step(NOGO);
+  ok(cw.runs[0].deaths === dMid, 'mercy window: no second bite at the pad');
+  for (let i = 0; i < 150 && cw.runs[0].deaths === dMid && cw.state === 'play'; i++) {
+    cw.step(NOGO);
+  }
+  ok(cw.runs[0].deaths > dMid, 'when mercy ends, the waiting spirit strikes again');
+  cw.disposeWorld();
+
+  // -- the power flip: orb → fright law → poof → rest → redeploy -------------
+  const fw = mkGame('hero', PCL);
+  for (let k = 1; k < fw.course.pac.orbs.length; k++) {
+    fw.course.pac.orbs[k].taken = true;
+  }
+  fw.ghosts.forEach((g, k) => { if (k > 1) g.poofT = 1e9; });   // bench two spirits
+  const orb0 = fw.course.pac.orbs[0];
+  fw.player.body.setTranslation({ x: orb0.x, y: 1.2, z: orb0.z }, true);
+  fw.player.vy = 0;
+  fw.step(NOGO);
+  ok(orb0.taken && fw.course.pac.powerT === PAC.frightF,
+    'power orb lights the board: the fright window opens');
+  let maxFright = 0, allFright = true;
+  for (let i = 0; i < 45; i++) {
+    fw.step(NOGO);
+    for (const g of fw.ghosts) {
+      if (g.poofT > 0) continue;
+      if (!g.fright) allFright = false;
+      if (i >= 10) maxFright = Math.max(maxFright, g.player.speed2D);
+    }
+  }
+  const cap = fw.player.def.speed * 0.82 * PAC.frightSlow + 0.4;
+  ok(allFright && maxFright <= cap,
+    `fright law: spirits crawl ≤ ${cap.toFixed(2)} m/s (max seen ${maxFright.toFixed(2)})`);
+  const g0 = fw.ghosts[0];
+  g0.player.body.setTranslation(
+    { x: fw.player.pos.x + 0.2, y: fw.player.pos.y, z: fw.player.pos.z }, true);
+  g0.to = null;                                     // pounce from a standstill
+  fw.step(NOGO);
+  ok(g0.poofT > 0 && fw.pacPoofs >= 1, 'a powered runner touching a spirit poofs it');
+  fw.step(NOGO);
+  ok(g0.pos.y < -30, 'a poofed spirit parks off-stage to rest');
+  for (let i = 0; i < PAC.poofF + 2 && fw.state === 'play'; i++) fw.step(NOGO);
+  ok(g0.poofT === 0
+    && Math.hypot(g0.pos.x - g0.home.x, g0.pos.z - g0.home.z) < 2.6
+    && g0.pos.y > -1, 'the rested spirit redeploys from its pad');
+  fw.disposeWorld();
+
+  // -- the ACTION button here is a spirit shove, not a spin -------------------
+  const sh = mkGame('hero', PCL);
+  for (const u of sh.course.pac.orbs) u.taken = true;
+  sh.ghosts.forEach((g, k) => { if (k > 0) g.poofT = 1e9; });
+  const t0 = sh.ghosts[0];
+  const hp0 = sh.player.pos;
+  t0.player.body.setTranslation({ x: hp0.x + 1.1, y: 1.0, z: hp0.z }, true);
+  t0.to = null;                                     // plant it squarely in reach
+  sh.step({ ...NOGO, spin: true });
+  ok(t0.stunT > 0 && t0.player.stun > 0,
+    'ACTION = spirit shove: the stagger lands (brains + physics)');
+  let drove = false;
+  for (let i = 0; i < 12; i++) { sh.step(NOGO); if (t0.drive !== 0) drove = true; }
+  ok(!drove, 'a shoved spirit sits out its whole stagger window');
+  for (let i = 0; i < PAC.stunF + 8; i++) sh.step(NOGO);
+  ok(t0.drive === 1, 'the shoved spirit shakes it off and resumes hunting');
+  sh.disposeWorld();
+
+  // -- verdicts: clock, solo quota, both 2P paths ------------------------------
+  const vx = mkGame('hero', PCL);
+  for (const u of vx.course.pac.orbs) u.taken = true;
+  vx.ghostsOff = true;
+  let ticks = 0;
+  vx.sfx = (k) => { if (k === 'tick') ticks++; };
+  vx.timeF = Math.floor((PAC.dur - 5.2) * 60);
+  for (let i = 0; i < 400 && vx.state === 'play'; i++) vx.step(NOGO);
+  ok(vx.state === 'over' && Math.abs(vx.survTime - PAC.dur) < 0.2,
+    `the clock calls it at ${PAC.dur}s (survTime ${vx.survTime?.toFixed(1)})`);
+  ok(ticks >= 4, 'the last five seconds tick audibly');
+  vx.disposeWorld();
+
+  const qf = mkGame('hero', PCL);
+  qf.ghostsOff = true;
+  for (const u of qf.course.pac.orbs) u.taken = true;
+  for (const d of qf.course.pac.dots) d.taken = true;   // rivals somehow swept it
+  qf.dotsLeft = 0;
+  qf.step(NOGO);
+  ok(qf.state === 'over' && !qf.runs[0].survived,
+    'board cleared while the human freeloaded → over (quota is personal)');
+  qf.disposeWorld();
+
+  const mk2 = () => {
+    const gg = new Game(R);
+    gg.heroIndex = HERO_IDS.indexOf('hero');
+    gg.start(PCL, { twoPlayer: true, hero2Index: 3 });
+    gg.ghostsOff = true;
+    for (const u of gg.course.pac.orbs) u.taken = true;
+    return gg;
+  };
+  const w2 = mk2();
+  ok(w2.players.length === 2 && w2.rivals.length === 3 && w2.ghosts.length === 4,
+    'pac 2P: two humans + three AI runners + four spirits share one board');
+  w2.runs.forEach((r) => { r.dots = PAC.quota; });
+  for (const d of w2.course.pac.dots) d.taken = true;
+  w2.dotsLeft = 0;
+  w2.step([NOGO, NOGO]);
+  ok(w2.state === 'win' && w2.runs.every((r) => r.survived),
+    'pac 2P verdict: both quotas met at board clear = WIN');
+  w2.disposeWorld();
+  const l2 = mk2();
+  l2.runs[0].dots = PAC.quota;
+  l2.runs[1].dots = PAC.quota - 1;             // friend freeloaded one short
+  for (const d of l2.course.pac.dots) d.taken = true;
+  l2.dotsLeft = 0;
+  l2.step([NOGO, NOGO]);
+  ok(l2.state === 'over' && !l2.runs.every((r) => r.survived),
+    'pac 2P verdict: one runner short of quota loses (individual quotas bite)');
+  l2.disposeWorld();
+}
+
 // ---- done -----------------------------------------------------------------
 if (fails) {
   console.error(`\n${fails} headless check(s) FAILED`);
   process.exit(1);
 }
+// ---- 16) free-mode facing law -----------------------------------------------
+// backing up must TURN the hero around — the Ghost Maze bug was gliding toward
+// the camera still chest-up-field. Racing keeps the +Z-clamped facing: an
+// auto-runner never turns its back on the flag, even in knockback.
+console.log('free-mode facing');
+{
+  const PCL = LEVELS.findIndex((l) => l.id === 'pac');
+  const fg = mkGame('hero', PCL);
+  fg.ghostsOff = true;                    // no spirit warp mid-assertion
+  const drive = (z, n) => {
+    for (let i = 0; i < n && fg.state === 'play'; i++) {
+      fg.step([{ x: 0, z, jump: false, jumpHeld: false, spin: false }]);
+    }
+  };
+  drive(-1, 50);
+  ok(fg.player.vz < -1.5 && Math.abs(fg.player.yaw) > 2.2,
+    `free mode backs up turned around (vz=${fg.player.vz.toFixed(1)}, yaw=${fg.player.yaw.toFixed(2)})`);
+  drive(1, 50);
+  ok(fg.player.vz > 1.5 && Math.abs(fg.player.yaw) < 0.7,
+    `free mode faces down-board again when driven forward (vz=${fg.player.vz.toFixed(1)}, yaw=${fg.player.yaw.toFixed(2)})`);
+  fg.disposeWorld();
+
+  const rg = mkGame('hero', 0);           // race: auto-run keeps facing +Z
+  for (let i = 0; i < 90 && rg.state === 'play'; i++) {
+    rg.step([{ x: 0, z: 0, jump: false, jumpHeld: false, spin: false }]);
+  }
+  ok(Math.abs(rg.player.yaw) < 0.5,
+    `race auto-run still faces the flag (yaw=${rg.player.yaw.toFixed(2)})`);
+  rg.disposeWorld();
+}
+
 console.log('\nall headless checks passed');

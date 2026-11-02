@@ -2,8 +2,9 @@
 
 A Crash-Bandicoot-style 3D platformer with Stumble-Guys chaos — auto-run
 through canyon gates and the living Sunset Alleys, race the AI field,
-survive the Crate Cove and the Bumper Arena, win the trophy. Playable solo
-or **two-player split screen** on one screen.
+survive the Crate Cove, out-last the Bumper Arena and devour the Ghost
+Maze, win the trophy. Playable solo or **two-player split screen** on one
+screen.
 
 Vanilla JavaScript (ES modules) + [three.js](https://threejs.org) for
 rendering + [Rapier](https://rapier.rs) for physics, loaded from `vendor/`
@@ -33,6 +34,7 @@ open <http://localhost:8001>. First load takes a moment: Rapier's WASM is
 | Enter | Confirm |
 | Esc | Pause / resume |
 | R | Retry • Q (paused) → title |
+| C (hold) | Ghost Maze — pull out to the whole-board view |
 | L | Language — English / العربية |
 
 ## Verify
@@ -45,10 +47,13 @@ node tools/headless.mjs   # i18n parity + input contract + real-physics runs
 
 ## Status
 
-Milestone 0 — the vertical slice: one course (Sunny Shore), five heroes,
-title → select → play → pause → clear/trophy flow, EN + AR, day only.
-Next: touch controls, audio, rivals, badges, and more of the course.
-See `AGENTS.md` for architecture and decisions.
+Five stages on the adventure map: **Daybreak Ridge** and **Sunset Alleys**
+(auto-run races), **Crate Cove** (last one dry), plus two always-open
+challenges beside the frontier — the **Bumper Arena** (survive 60s) and the
+**Ghost Maze** (eat every dot while four spirits hunt you; power orbs flip
+the food chain). Ten heroes, local split-screen 2P, punch/carry/throw, EN +
+AR full translation, procedural everything. See `AGENTS.md` for architecture
+and decisions.
 
 ## Built with
 

@@ -13,9 +13,9 @@ import { createWorld } from './phys.js';
 import { Player, HERO_IDS, CHARACTERS } from './hero.js';
 import {
   LEVELS, courseStep, hazardTouch, windAt, arenaStep, ARENA,
-  crateStep, CRATES, MAP_SPACING, wetAt,
+  crateStep, CRATES, MAP_SPACING, wetAt, PAC, isChallenge, pacCellAt,
 } from './levels.js';
-import { makeRivals } from './rivals.js';
+import { makeRivals, makeGhosts } from './rivals.js';
 
 export default class Game {
   constructor(RAPIER) {
@@ -31,8 +31,10 @@ export default class Game {
     this.sfx = () => {};                 // main.js injects the audio hook
     this.hazardsOff = false;             // geometry-only bots (headless)
     this.gatesOff = false;               // race-rule gates off for bots
-    this.mode = 'race';                  // 'race' | 'survival' | 'crates'
+    this.ghostsOff = false;              // spirits idle (maze geometry probes)
+    this.mode = 'race';                  // 'race' | 'survival' | 'crates' | 'pac'
     this.rivals = [];
+    this.ghosts = [];                    // Ghost Maze spirits (mode 'pac')
     this.wave = 1;                       // survival wave (HUD)
     // two-player: up to two local runners share the stage. `player` is
     // always P1; `players` holds both; `runs` carries per-player progress
@@ -52,7 +54,7 @@ export default class Game {
   // only raised with the whole race ladder done.
   allRacesCleared() {
     for (let i = 0; i < LEVELS.length; i++) {
-      if ((LEVELS[i].mode || 'race') !== 'survival' && this.frontier < i + 1) {
+      if (!isChallenge(LEVELS[i]) && this.frontier < i + 1) {
         return false;
       }
     }
@@ -76,14 +78,13 @@ export default class Game {
   mapMove(d) {
     if (this.map.walk) return;
     let hi = this.frontier;
-    // survival challenge nodes are ALWAYS visitable, unlocks be damned —
-    // the arena is a pub challenge, not a frontier stage
+    // challenge nodes (arena, Ghost Maze) are ALWAYS visitable, unlocks be
+    // damned — they are pub challenges, not frontier stages
     for (let i = 0; i < LEVELS.length; i++) {
-      if ((LEVELS[i].mode || 'race') === 'survival') hi = Math.max(hi, i);
+      if (isChallenge(LEVELS[i])) hi = Math.max(hi, i);
     }
     let next = Math.max(0, Math.min(hi, this.map.cursor + d));
-    const locked = (i) => i > this.frontier &&
-      (LEVELS[i].mode || 'race') !== 'survival';
+    const locked = (i) => i > this.frontier && !isChallenge(LEVELS[i]);
     // skim past locked stages on the way to a challenge node, never park
     // on one that is locked
     while (next > 0 && next < hi && locked(next)) next += d > 0 ? 1 : -1;
@@ -159,33 +160,39 @@ export default class Game {
       this.players.push(new Player(this.R, this.world, this.selectedHero2(),
         spawn2));
     }
-    // survival & crates = free control: no auto-run, WASD in two axes.
+    // survival & crates & pac = free control: no auto-run, WASD in two axes.
     // Survival hits bite (a flat heart pool keeps the leaderboard honest);
-    // crates don't do hearts at all — the SEA is the only judge.
+    // crates and the maze don't do hearts at all — the SEA / the CLOCK are
+    // the only judges there.
     for (const P of this.players) {
       P.free = this.mode !== 'race';
       if (P.free) P.autoRun = false;
       if (this.mode === 'survival') {
         P.maxHp = ARENA.hearts;
         P.hp = ARENA.hearts;
-      } else if (this.mode === 'crates') {
-        P.maxHp = 99;                   // splash = out, hearts don't apply
+      } else if (this.mode === 'crates' || this.mode === 'pac') {
+        P.maxHp = 99;                   // a spirit warps, it does not kill
         P.hp = 99;
       }
     }
     // crates races AGAINST the rivals (last one dry wins); survival is a
-    // solo pub challenge. Rivals take the pads after every human player.
+    // solo pub challenge; the maze runs against rivals AND four spirits.
     this.rivals = this.mode === 'survival' ? []
       : makeRivals(this.R, this.world, this.course,
         CHARACTERS[this.selectedHero()], this.course.spawnPads,
         this.players.length);
-    if (this.mode === 'crates') {
+    if (this.mode === 'crates' || this.mode === 'pac') {
       for (const r of this.rivals) { r.player.free = true; r.player.autoRun = false; }
     }
+    this.ghosts = this.mode === 'pac' ? makeGhosts(this.R, this.world,
+      this.course, CHARACTERS[this.selectedHero()]) : [];
+    this.pacPoofs = 0;
+    this.dotsLeft = this.course.pac ? this.course.pac.dots.length : 0;
     // per-player progress: nothing is shared between P1 and P2
     this.runs = this.players.map((P) => ({
       P, coins: 0, deaths: 0, finished: false, clearTime: 0, aiPlace: 1,
       out: false, survived: false, bestSpawn: { ...P.spawn },
+      dots: 0, graceT: 0,               // pac mode: personal quota + warp mercy
     }));
     this.frame = 0;
     this.timeF = 0;
@@ -218,6 +225,7 @@ export default class Game {
     const fl = Array.isArray(flags) ? flags : [flags];
     if (this.mode === 'survival') { this.stepSurvival(fl); return; }
     if (this.mode === 'crates') { this.stepCrates(fl); return; }
+    if (this.mode === 'pac') { this.stepPac(fl); return; }
     courseStep(this.R, this.course, this.frame,
       this.hazardsOff ? null : this.player);
     // drop given-way crumble slabs out of the physics world (safe between
@@ -543,6 +551,176 @@ export default class Game {
         this.state = 'over';
       }
     }
+  }
+
+  // ---- Ghost Maze (mode 'pac') — eat the board, dodge the spirits --------
+  // Purist rules: the run ends when the LAST dot is gone. Win = every human
+  // ate at least their quota (PAC.quota) — on a shared board, freeloading
+  // loses; otherwise the clock (PAC.dur) calls it at zero. No hearts here:
+  // a spirit's touch WARPS you back to your start pad (dots stay eaten —
+  // it steals TIME, not progress) with a short mercy so the pads never turn
+  // into pin-loops. Power orbs fright the spirits for PAC.frightF: touching
+  // one then poofs it off-stage for PAC.poofF. The AI runners munch too but
+  // stop at PAC.aiCap (enforced AT THE EAT, not just in the brain — legs
+  // overshoot) so every human quota stays mathematically reachable.
+  stepPac(flags) {
+    const fl = Array.isArray(flags) ? flags : [flags];
+    const t = this.timeF / 60;
+    const pac = this.course.pac;
+    if (pac.powerT > 0) pac.powerT -= 1;
+    for (const run of this.runs) if (run.graceT > 0) run.graceT--;
+    for (const r of this.rivals) if (r.graceT > 0) r.graceT--;
+
+    // humans: free two-axis control; ACTION shoves spirits instead of spinning
+    this.runs.forEach((run, i) => {
+      const f = fl[i] || fl[0];
+      run.P.step({ ...f, spin: false });
+      if (f.spin) this.pacAction(run.P);
+    });
+    // AI runners munch / flee / hunt with their own brains
+    for (const r of this.rivals) {
+      r.stepPac(this.course, this.frame, {
+        ghosts: this.ghosts,
+        fright: pac.powerT > 0,
+        hungry: r.eaten < PAC.aiCap && this.dotsLeft > 0,
+      });
+    }
+    // spirits hunt everyone — brains first, then the physics tick (house law)
+    const runners = [];
+    for (const run of this.runs) runners.push(run.P);
+    for (const r of this.rivals) runners.push(r.player);
+    if (this.ghostsOff) {
+      // geometry-only bots: PARK the spirits off-stage exactly like hazards —
+      // an un-stepped capsule loitering at spawn would body-lock the bot
+      for (const g of this.ghosts) {
+        g.player.body.setNextKinematicTranslation({ x: 0, y: -40, z: 0 });
+      }
+    } else {
+      for (const g of this.ghosts) {
+        g.step(this.course, this.frame, runners, pac.powerT > 0);
+      }
+    }
+    this.world.step();
+
+    // ---- munching: one cell lookup per runner — the carpet is pure data --
+    const munch = (P, addFn) => {
+      const p = P.pos;
+      const c = pacCellAt(this.course, p.x, p.z);
+      const row = pac.dotAt[c.i];
+      const d = row && row[c.j];
+      if (d && !d.taken) {              // rounding already proves proximity
+        d.taken = true;
+        this.dotsLeft--;
+        addFn();
+      }
+    };
+    for (const run of this.runs) {
+      munch(run.P, () => {
+        run.dots++;
+        this.sfx('dot');                // every human's blip is meaningful
+      });
+    }
+    for (const r of this.rivals) {
+      if (r.eaten < PAC.aiCap) munch(r.player, () => { r.eaten++; });
+    }
+    // power orbs flip the whole board — any runner can trigger it
+    for (const q of runners) {
+      const p = q.pos;
+      const c = pacCellAt(this.course, p.x, p.z);
+      const row = pac.orbAt[c.i];
+      const u = row && row[c.j];
+      if (u && !u.taken) {
+        u.taken = true;
+        pac.powerT = PAC.frightF;
+        this.sfx('power');
+      }
+    }
+
+    // ---- spirit touches: powered runners poof, normal ones get WARPED ----
+    const caught = (P) => {
+      const p = P.pos;
+      for (const g of this.ghosts) {
+        if (g.poofT > 0) continue;
+        const gp = g.pos;
+        if (Math.abs(gp.y - p.y) > 1.15) continue;    // hopping over is legal
+        if (Math.hypot(gp.x - p.x, gp.z - p.z) <= PAC.catchR) return g;
+      }
+      return null;
+    };
+    for (const run of this.runs) {
+      const g = this.ghostsOff ? null : caught(run.P);
+      if (!g) continue;
+      if (pac.powerT > 0) {             // the food chain flipped
+        g.poof();
+        this.pacPoofs++;
+        this.sfx('ghostDown');
+        continue;
+      }
+      if (run.graceT > 0) continue;     // mercy: no second bite at the pad
+      run.deaths++;                     // warped back — that's a time theft
+      if (run === this.runs[0]) { this.deaths = run.deaths; this.sfx('fall'); }
+      run.P.respawn();
+      run.graceT = PAC.mercyF;
+    }
+    for (const r of this.rivals) {
+      const g = this.ghostsOff ? null : caught(r.player);
+      if (!g) continue;
+      if (pac.powerT > 0) { g.poof(); this.pacPoofs++; continue; }
+      if (r.graceT > 0) continue;
+      r.player.respawn();               // same punishment: back to their pad
+      r.pacState = null;
+      r.graceT = PAC.mercyF;
+    }
+
+    // ---- verdict ----------------------------------------------------------
+    if (this.dotsLeft <= 0) {
+      // board clear — every human must have pulled their own weight
+      const met = this.runs.filter((r) => r.dots >= PAC.quota).length;
+      this.survTime = t;
+      if (met === this.runs.length) {
+        for (const run of this.runs) run.survived = true;
+        this.sfx('clear');
+        this.state = 'win';
+      } else {
+        this.sfx('gameover');
+        this.state = 'over';
+      }
+      return;
+    }
+    if (t >= PAC.dur) {                 // the maze held
+      this.survTime = t;
+      this.sfx('gameover');
+      this.state = 'over';
+      return;
+    }
+    const rem = PAC.dur - t;            // heartbeat pressure in the last 5s
+    if (rem <= 5 && this.timeF >= this.tickAt) {
+      this.tickAt = this.timeF + 60;
+      this.sfx('tick');
+    }
+  }
+
+  // ACTION in the maze: a spirit shove — stagger whatever spirit is within
+  // reach for ~0.9s. It buys time, not kills; nothing to grab or throw here.
+  pacAction(P) {
+    let best = null, bd = PAC.shoveR;
+    for (const g of this.ghosts) {
+      if (g.poofT > 0) continue;
+      const gp = g.pos, pp = P.pos;
+      if (Math.abs(gp.y - pp.y) > 1.3) continue;
+      const d = Math.hypot(gp.x - pp.x, gp.z - pp.z);
+      if (d < bd) { bd = d; best = g; }
+    }
+    P.punchT = 14;
+    if (best) {
+      const dx = best.pos.x - P.pos.x, dz = best.pos.z - P.pos.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      best.stunSpirit(dx / dl, dz / dl);
+      this.sfx('hit');
+      return 'shove';
+    }
+    if (P === this.player) this.sfx('spin');
+    return 'punch';
   }
 
   pause() { if (this.state === 'play') this.state = 'pause'; }

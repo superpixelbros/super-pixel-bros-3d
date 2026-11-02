@@ -172,6 +172,66 @@ export function buildHero(def) {
   return { group: g, legL, legR, armL, armR, head };
 }
 
+// A Ghost Maze spirit: our own ghostly folk in the same boxes-and-domes
+// language as the heroes — a soft dome body with a scalloped floating hem,
+// stubby nub arms and big expressive eyes that track the chase. Origin at
+// the "feet" (the hem dips), total height ≈ 1.25 m to sit on the same
+// capsule collider as everyone else. Returns { group, eyes, mats } so the
+// renderer can nudge the pupils toward movement and repaint for fright
+// without rebuilding geometry.
+export function buildSpirit(color) {
+  const g = new THREE.Group();
+  const base = shade(color, 0.94);
+  const deep = shade(color, 0.7);
+  const mats = [];
+  const soft = (geo, hex, x = 0, y = 0, z = 0) => {
+    const m = new THREE.Mesh(geo,
+      new THREE.MeshLambertMaterial({ color: hex }));
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    mats.push(m.material);
+    g.add(m);
+    return m;
+  };
+
+  // dome body: straight sides into a soft crown
+  soft(new THREE.CylinderGeometry(0.33, 0.36, 0.5, 18), base, 0, 0.6, 0);
+  const dome = soft(
+    new THREE.SphereGeometry(0.33, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    base, 0, 0.85, 0);
+  dome.scale.set(1, 1.1, 1);
+  // scalloped hem — alternating dips of frozen smoke, floating free
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    soft(new THREE.SphereGeometry(0.1, 10, 8), k % 2 ? deep : base,
+      Math.cos(a) * 0.31, k % 2 ? 0.24 : 0.33, Math.sin(a) * 0.31);
+  }
+  // stubby nub arms raised for the grab
+  for (const s of [-1, 1]) {
+    const arm = soft(new THREE.CapsuleGeometry(0.06, 0.12, 4, 10), deep,
+      s * 0.38, 0.78, 0.04);
+    arm.rotation.z = s * -0.9;
+  }
+
+  // big family eyes: whites, pupils (the renderer slides these to look)
+  const eyes = [];
+  for (const s of [-1, 1]) {
+    soft(new THREE.SphereGeometry(0.085, 14, 10), WHITE, s * 0.12, 0.98, 0.25)
+      .scale.set(1, 1.12, 0.7);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10),
+      mat(INK));
+    pupil.position.set(s * 0.115, 0.97, 0.305);
+    pupil.scale.set(1, 1.1, 0.8);
+    g.add(pupil);                                    // tinted separately? no
+    eyes.push(pupil);
+  }
+  // an "ooh" of a mouth
+  soft(new THREE.SphereGeometry(0.05, 10, 8), INK, 0, 0.72, 0.3)
+    .scale.set(1, 1.2, 0.6);
+
+  return { group: g, eyes, mats };
+}
+
 // The trophy: a chunky gold cup in the same boxes-and-cylinders language
 // as the heroes. Origin sits at the grip (bottom of the base) so it can be
 // parented straight to a hand pivot and stay put while the arm swings.

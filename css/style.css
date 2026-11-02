@@ -212,6 +212,33 @@ html, body {
 #hud-time.warn { color: var(--gold); }
 #hud-time.crit { color: #ff5a5f; animation: pulse 0.5s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---- Ghost Maze live scoreboard + final standings ---- */
+#hud-coins .score-row { display: flex; align-items: center; gap: 8px; line-height: 1.6; }
+#hud-coins .score-row b {
+  margin-inline-start: auto; padding-inline-start: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.score-row .who, .rank-row .who { letter-spacing: 0.06em; opacity: 0.92; }
+.chip {
+  width: 11px; height: 11px; border-radius: 4px; flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+.ranks { margin-top: 12px; min-width: 250px; text-align: start; }
+.ranks:empty { display: none; }
+.rank-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 12px; margin: 3px 0; border-radius: 10px;
+  font-size: 14.5px; font-weight: 700;
+}
+.rank-row b { margin-inline-start: auto; font-variant-numeric: tabular-nums; color: var(--dim); }
+.rank-row .cup { width: 22px; text-align: center; font-size: 17px; }
+.rank-row .cup.dim { opacity: 0.35; font-size: 13px; }
+.rank-row.lead {
+  background: rgba(255, 210, 62, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 210, 62, 0.4);
+}
+.rank-row.lead b { color: var(--gold); }
 #sc-dq { align-items: center; justify-content: center; }
 .dq-mark { font-size: 54px; margin-bottom: 6px; }
 .dq h2 { color: #ff5a5f; }

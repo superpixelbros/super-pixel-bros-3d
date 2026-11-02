@@ -332,10 +332,21 @@ export class Player {
     this.body.setNextKinematicTranslation({
       x: p.x + mv.x, y: p.y + mv.y, z: p.z + mv.z,
     });
-    // achieved movement drives the walk animation and facing
+    // achieved movement drives the walk animation and facing. FREE mode
+    // faces where you ACTUALLY walk — backing up turns your back on the
+    // course (the maze/arena read this constantly); stand still and the
+    // last heading holds so idle jitter never spins the hero. Races keep
+    // the old +Z clamp: an auto-runner always faces the flag, even while a
+    // knockback slides it backwards.
     this.speed2D = Math.hypot(mv.x, mv.z) / dt;
     this.animT += Math.max(this.speed2D, this.autoRun ? 0.5 : 0) * dt * 2.0;
-    this.yaw = lerpAngle(this.yaw, Math.atan2(this.vx, Math.max(this.vz, 1e-6)));
+    if (this.free) {
+      if (this.speed2D > 0.35) {
+        this.yaw = lerpAngle(this.yaw, Math.atan2(this.vx, this.vz));
+      }
+    } else {
+      this.yaw = lerpAngle(this.yaw, Math.atan2(this.vx, Math.max(this.vz, 1e-6)));
+    }
   }
 
   respawn() {

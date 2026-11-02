@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { view } from './view.js';
-import { buildHero, buildTrophy } from './models.js';
+import { buildHero, buildTrophy, buildSpirit } from './models.js';
 import { CHARACTERS, HERO_RADIUS, HERO_HALF } from './hero.js';
 import { LEVELS, ARENA, CRATES, MAP_SPACING, wetAt } from './levels.js';
 
@@ -71,6 +71,11 @@ export class Renderer {
     this.rivalGroup = new THREE.Group();
     this.scene.add(this.rivalGroup);
     this.rivalParts = [];
+    // Ghost Maze spirits: own group, own rig builder (mode 'pac')
+    this.ghostGroup = new THREE.Group();
+    this.scene.add(this.ghostGroup);
+    this.ghostParts = [];
+    this.peek = false;     // hold-C board overview (main.js feeds the key)
 
     this.buildDiorama();
 
@@ -104,14 +109,20 @@ export class Renderer {
     this.scene.add(g);
     const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
     let lastRace = 0;
-    LEVELS.forEach((l, i) => { if ((l.mode || 'race') !== 'survival') lastRace = i; });
+    LEVELS.forEach((l, i) => {
+      const m = l.mode || 'race';
+      if (m !== 'survival' && m !== 'pac') lastRace = i;
+    });
 
     LEVELS.forEach((lvl, i) => {
       const arena = (lvl.mode || 'race') === 'survival';
+      const pacMode = lvl.mode === 'pac';
       const island = new THREE.Mesh(
         arena
           ? new THREE.CylinderGeometry(1.7, 2.0, 0.9, 20)   // arena: round stage
-          : new THREE.CylinderGeometry(1.55, 1.9, 0.9, 9),
+          : pacMode
+            ? new THREE.BoxGeometry(3.0, 0.9, 2.2)          // maze: a slab board
+            : new THREE.CylinderGeometry(1.55, 1.9, 0.9, 9),
         mat(lvl.theme.sand)
       );
       island.position.set(i * MAP_SPACING, 0, 0);
@@ -123,6 +134,21 @@ export class Renderer {
         ring.rotation.x = Math.PI / 2;
         ring.position.set(i * MAP_SPACING, 0.5, 0);
         g.add(ring);
+      } else if (pacMode) {
+        // neon wall segments + a peeking spirit mark the Ghost Maze node
+        const neon = mat(0x5fd8ff);
+        for (const [ox, oz, sw, sd] of [[-0.7, -0.3, 1.2, 0.1], [0.3, -0.3, 0.1, 0.9],
+          [-0.2, 0.45, 1.4, 0.1], [0.95, 0.2, 0.1, 1.0]]) {
+          const seg = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.16, sd), neon);
+          seg.position.set(i * MAP_SPACING + ox, 0.53, oz);
+          g.add(seg);
+        }
+        const sp = new THREE.Mesh(
+          new THREE.SphereGeometry(0.24, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+          mat(0xe8544f));
+        sp.scale.set(1, 1.35, 1);
+        sp.position.set(i * MAP_SPACING + 0.55, 0.46, -0.6);
+        g.add(sp);
       }
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.05, 0.05, 1.1, 6), mat(0xd8d4c8));
@@ -172,6 +198,30 @@ export class Renderer {
       const parts = buildHero(r.player.def);
       parts.group.scale.setScalar(0.9);
       this.rivalGroup.add(parts.group);
+      return parts;
+    });
+  }
+
+  // ---- spirit meshes (rebuilt every maze run) ------------------------------
+  // Each material remembers its home colour so the fright repaint can tint
+  // and always restore it — no rebuilds mid-run.
+  setGhosts(ghosts) {
+    for (const parts of this.ghostParts) {
+      this.ghostGroup.remove(parts.group);
+      parts.group.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+    }
+    this.ghostParts = (ghosts || []).map((g) => {
+      const parts = buildSpirit(g.gd.color);
+      for (const m of parts.mats) m.userData.base = m.color.getHex();
+      for (const e of parts.eyes) {
+        e.userData.bx = e.position.x;
+        e.userData.bz = e.position.z;
+      }
+      parts.yaw = 0;
+      this.ghostGroup.add(parts.group);
       return parts;
     });
   }
@@ -402,6 +452,106 @@ export class Renderer {
       this.courseGroup.add(splash);
       return { k, g, foam, splash, splashT: -1 };
     });
+
+    // Ghost Maze (mode 'pac'): the board IS the level — a dark slab, neon
+    // trimmed walls (colliders stay PAC.wallTop tall; the tower cam needs to
+    // see down every corridor), one InstancedMesh dot carpet that zero-scales
+    // eaten dots, pulsing power orbs and cyan warp-home rings on the pads.
+    this.pacDots = null;
+    this.pacDotCount = -1;
+    this.pacOrbMeshes = [];
+    this.pacRings = [];
+    this.pacMarks = [];
+    if (course.isPac) {
+      const pc = course.pac;
+      const bw = pc.cols * pc.pitch + 3.2, bd = pc.rows.length * pc.pitch + 3.2;
+      const slab = add(new THREE.Mesh(new THREE.BoxGeometry(bw, 2, bd), sand),
+        0, -1, 0);
+      slab.receiveShadow = true;
+      add(new THREE.Mesh(new THREE.BoxGeometry(bw + 1.4, 0.6, bd + 1.4), sandDark),
+        0, -0.35, 0);
+
+      // Walls read as WALLS from the chase cam: 1.45 m of lit-indigo rock
+      // side + a small deep-teal light tile on top (the old 2.2 m flat cyan
+      // cap turned every column into a glowing floor tile from above).
+      const vh = 1.45;                       // visual wall height (see above)
+      let nWall = 0;
+      for (const row of pc.rows) for (const ch of row) if (ch === '#') nWall++;
+      const walls = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(pc.pitch, vh, pc.pitch), mat(th.rock), nWall);
+      const caps = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(pc.pitch * 0.62, 0.06, pc.pitch * 0.62),
+        new THREE.MeshBasicMaterial({ color: 0x2e7fa6 }), nWall);
+      const m4 = new THREE.Matrix4();
+      let wi = 0;
+      for (let i = 0; i < pc.rows.length; i++) {
+        for (let j = 0; j < pc.cols; j++) {
+          if (pc.rows[i][j] !== '#') continue;
+          const x = (j - (pc.cols - 1) / 2) * pc.pitch;
+          const z = (i - (pc.rows.length - 1) / 2) * pc.pitch;
+          walls.setMatrixAt(wi, m4.makeTranslation(x, vh / 2 - 0.03, z));
+          caps.setMatrixAt(wi, m4.makeTranslation(x, vh + 0.01, z));
+          wi++;
+        }
+      }
+      walls.instanceMatrix.needsUpdate = true;
+      caps.instanceMatrix.needsUpdate = true;
+      this.courseGroup.add(walls, caps);
+
+      // dot carpet — refreshed only when game.dotsLeft changes (sync)
+      const dotMesh = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(0.085, 8, 6),
+        new THREE.MeshBasicMaterial({ color: 0xffe9b0 }), pc.dots.length);
+      this.courseGroup.add(dotMesh);
+      this.pacDots = { mesh: dotMesh, m4: new THREE.Matrix4() };
+
+      // power orbs: gold core + pink halo, pulsing until someone swallows one
+      const orbCore = new THREE.MeshBasicMaterial({ color: 0xffd23e });
+      const orbHalo = new THREE.MeshBasicMaterial(
+        { color: 0xff9ad2, transparent: true, opacity: 0.55 });
+      this.pacOrbMeshes = pc.orbs.map((u) => {
+        const g = new THREE.Group();
+        g.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.2, 0), orbCore));
+        const halo = new THREE.Mesh(
+          new THREE.TorusGeometry(0.36, 0.045, 6, 18), orbHalo);
+        halo.rotation.x = Math.PI / 2;
+        g.add(halo);
+        add(g, u.x, u.y, u.z);
+        return { u, g };
+      });
+
+      // warp-home rings on the human pads — "this is where you'll land"
+      const padRingMat = new THREE.MeshBasicMaterial(
+        { color: 0x7cf0ff, transparent: true, opacity: 0.35 });
+      for (let pi = 0; pi < 2 && pi < course.spawnPads.length; pi++) {
+        const [px, pz] = course.spawnPads[pi];
+        const ring = add(new THREE.Mesh(
+          new THREE.TorusGeometry(0.85, 0.05, 6, 20), padRingMat.clone()),
+        px, 0.06, pz);
+        ring.rotation.x = Math.PI / 2;
+        this.pacRings.push(ring);
+      }
+
+      // "who am I?" — a warm pulsing ring under each human runner. From the
+      // chase cam every hero is small and dark; this finds you instantly,
+      // even right after a warp dumps you back on the pad.
+      for (let mi = 0; mi < 2; mi++) {
+        const mark = new THREE.Mesh(new THREE.TorusGeometry(0.58, 0.06, 6, 22),
+          new THREE.MeshBasicMaterial(
+            { color: mi ? 0xff9ad2 : 0xffb640, transparent: true, opacity: 0.9 }));
+        mark.rotation.x = Math.PI / 2;
+        mark.visible = false;
+        this.courseGroup.add(mark);
+        this.pacMarks.push(mark);
+      }
+
+      // the board is big and dark — push the fog back so far rows stay lit
+      this.scene.fog.near = 60;
+      this.scene.fog.far = 190;
+    } else {
+      this.scene.fog.near = 34;
+      this.scene.fog.far = 96;
+    }
 
     // finish pad + flagpole (survival has no flag — only the clock)
     if (isFinite(course.finishZ)) {
@@ -1525,6 +1675,87 @@ export class Renderer {
       }
     }
 
+    // spirits haunt the Ghost Maze world — they glide, they don't walk: a
+    // hover bob, a lean into the chase, tracking pupils, and the classic
+    // fright repaint (blue, flashing white as the power fades). Poofed or
+    // parked spirits (y −40) stay hidden. Defensive like everything here:
+    // one missing part must never skip render() AND Input.endFrame().
+    this.ghostGroup.visible = (state === 'play' || state === 'pause'
+      || state === 'clear' || state === 'dq' || state === 'lost')
+      && this.ghostParts.length > 0;
+    if (this.ghostGroup.visible && game.ghosts) {
+      const pc = game.course && game.course.pac;
+      const fright = !!(pc && pc.powerT > 0);
+      const blink = fright && pc.powerT < 90 && ((pc.powerT >> 3) % 2 === 0);
+      for (let i = 0; i < game.ghosts.length; i++) {
+        const gs = game.ghosts[i];
+        const parts = this.ghostParts[i];
+        if (!parts) continue;
+        const pos = gs.pos;
+        const g = parts.group;
+        const out = gs.poofT > 0 || pos.y < -20;
+        g.visible = !out;
+        if (out) continue;                   // resting off-stage / parked
+        g.position.set(pos.x,
+          pos.y - FEET + 0.16 + Math.sin(t * 3 + i * 1.7) * 0.07, pos.z);
+        const sp = gs.player.speed2D;
+        if (sp > 0.4) parts.yaw = Math.atan2(gs.player.vx, gs.player.vz);
+        g.rotation.y = parts.yaw;
+        g.rotation.z = (gs.stunT > 0 || gs.player.stun > 0)
+          ? Math.sin(t * 30 + i) * 0.16 : Math.sin(t * 2.2 + i) * 0.045;
+        for (const m of parts.mats) {
+          m.color.setHex(!fright ? m.userData.base : blink ? 0xf2fbff : 0x5f8dff);
+        }
+        // chase-gaze: pupils lean into the movement (world → local yaw frame)
+        const th = parts.yaw;
+        const lx = gs.player.vx * Math.cos(th) - gs.player.vz * Math.sin(th);
+        const lz = gs.player.vx * Math.sin(th) + gs.player.vz * Math.cos(th);
+        for (const e of parts.eyes) {
+          e.position.x = e.userData.bx + THREE.MathUtils.clamp(lx * 0.02, -0.035, 0.035);
+          e.position.z = e.userData.bz + THREE.MathUtils.clamp(lz * 0.02, -0.02, 0.035);
+        }
+      }
+    }
+
+    // Ghost Maze board → meshes: eaten dots blink out, orbs pulse until
+    // swallowed, the home rings breathe harder while the power runs
+    if (this.pacDots && game.course && game.course.pac) {
+      const pc = game.course.pac;
+      if (this.pacDotCount !== game.dotsLeft) {     // something just got eaten
+        this.pacDotCount = game.dotsLeft;
+        const m4 = this.pacDots.m4;
+        pc.dots.forEach((d, di) => {
+          m4.makeScale(d.taken ? 0 : 1, d.taken ? 0 : 1, d.taken ? 0 : 1);
+          m4.setPosition(d.x, d.y, d.z);
+          this.pacDots.mesh.setMatrixAt(di, m4);
+        });
+        this.pacDots.mesh.instanceMatrix.needsUpdate = true;
+      }
+      for (const om of this.pacOrbMeshes) {
+        om.g.visible = !om.u.taken;
+        if (om.g.visible) {
+          om.g.scale.setScalar(1 + Math.sin(t * 4 + om.u.x) * 0.15);
+          om.g.rotation.y = t * 1.6;
+        }
+      }
+      for (const ring of this.pacRings) {
+        ring.material.opacity = pc.powerT > 0
+          ? 0.55 + Math.sin(t * 8) * 0.2 : 0.35;
+      }
+      // hero markers trail the runners — you can never lose yourself
+      for (let mi = 0; mi < this.pacMarks.length; mi++) {
+        const mk = this.pacMarks[mi];
+        const pl = game.players && game.players[mi];
+        mk.visible = !!pl;
+        if (pl) {
+          mk.position.set(pl.pos.x, 0.06, pl.pos.z);
+          mk.scale.setScalar(1 + Math.sin(t * 5 + mi * 2.4) * 0.08);
+        }
+      }
+    } else if (this.pacMarks.length) {
+      for (const mk of this.pacMarks) mk.visible = false;
+    }
+
     // menu hero idles on the pedestal, slowly turning; on the select AND
     // victory screens it slides to the free side of the card (RTL mirrored)
     // and the pedestal follows. The menu cam ORBITS, so the UI pixel is
@@ -1618,6 +1849,10 @@ export class Renderer {
       // Crate Cove: same fixed-yaw wide tower shot, the whole grid of
       // decks plus open sea in frame — screen-true free control
       this.lerpCam(0, 16.5, -15.5, 0, 0.4, 0.5);
+    } else if (p && game.course && game.course.isPac) {
+      // Ghost Maze: chase cam inside the board — or the hold-C fit view
+      const c = this.pacCam(game.course.pac, p);
+      this.lerpCam(c.x, c.y, c.z, c.lx, c.ly, c.lz);
     } else if (p) {
       const pos = p.pos;
       // Sunset Alleys: pull back and rise a little so the tall facades read
@@ -1628,13 +1863,16 @@ export class Renderer {
         pos.x * 0.45, pos.y - 0.2, pos.z + 4.5
       );
     }
-    // P2 camera: races follow P2; free modes (crates / arena) share P1's
-    // fixed tower shot so both halves see the whole field
+    // P2 camera: races follow P2; the maze gives every runner its own chase
+    // rig (each split half trails its own hero); arena/crates share one shot
     if (this.twoPlayer && inRun && p2) {
       if (game.mode === 'race') {
         const q = p2.pos;
         this.lerpCam2(q.x * 0.62, q.y + 2.5, q.z - 5.4,
           q.x * 0.45, q.y - 0.2, q.z + 4.5);
+      } else if (game.mode === 'pac' && game.course && game.course.pac) {
+        const c = this.pacCam(game.course.pac, p2);
+        this.lerpCam2(c.x, c.y, c.z, c.lx, c.ly, c.lz);
       } else {
         this.cam2.position.copy(this.cam.position);
         this.cam2.quaternion.copy(this.cam.quaternion);
@@ -1664,6 +1902,48 @@ export class Renderer {
     const pitch = 0.33;
     return {
       x: focusX, y: 0.55 + Math.sin(pitch) * d, z: Math.cos(pitch) * d,
+    };
+  }
+
+  // Ghost Maze cam, one fixed yaw (WASD stays screen-true):
+  // • chase — an arcade over-the-shoulder rig INSIDE the board: ~50° pitch,
+  //   focus tracking the runner (velocity lead, soft clamps keep the rig on
+  //   the slab), hero big in the lower frame with 4–6 corridors ahead;
+  // • peek (hold C) — the old full-board fit view so you can plan a route.
+  // Both solve their target window through the SAME hfov/vfov fit, so narrow
+  // windows pull back proportionally and never crop the action.
+  pacCam(pc, P) {
+    const cam = this.cam;
+    const vfov = THREE.MathUtils.degToRad(cam.fov);
+    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * cam.aspect);
+    const clamp = THREE.MathUtils.clamp;
+    if (this.peek) {
+      const halfW = pc.cols * pc.pitch / 2 + 2.4;
+      const halfZ = pc.rows.length * pc.pitch / 2 + 1.8;
+      const pitch = 0.94;                   // steep but not straight down
+      const dH = halfW / Math.tan(hfov / 2);
+      const dV = halfZ * Math.sin(pitch) / Math.tan(vfov / 2);
+      const d = clamp(Math.max(dH, dV), 18, 46);
+      return {
+        x: 0, y: 0.2 + Math.sin(pitch) * d, z: 1.5 - Math.cos(pitch) * d,
+        lx: 0, ly: 0.2, lz: 1.5,
+      };
+    }
+    const pitch = 0.874;                    // ≈50° — lanes read, walls loom a bit
+    const winW = 9.5, winZ = 9;             // metres of board we want around us
+    const d = clamp(Math.max(
+      winW / Math.tan(hfov / 2),
+      winZ * Math.sin(pitch) / Math.tan(vfov / 2)), 11, 26);
+    const halfW = pc.cols * pc.pitch / 2, halfZ = pc.rows.length * pc.pitch / 2;
+    // a touch of velocity lead reads corners earlier without snapping
+    const q = P.pos;
+    const fx = clamp(q.x + P.vx * 0.12, -halfW - 2.5, halfW + 2.5);
+    const fz = clamp(q.z + P.vz * 0.12, -halfZ - 3, halfZ + 4);
+    return {
+      x: fx,
+      y: Math.max(1.8, q.y * 0.25) + Math.sin(pitch) * d,
+      z: fz - Math.cos(pitch) * d,
+      lx: fx, ly: 0.35, lz: fz + 2.6,      // gaze ahead — hero sits low-frame
     };
   }
 

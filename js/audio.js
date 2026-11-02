@@ -49,6 +49,14 @@ const THEMES = [
           ['C5',1],['B4',1],['A4',2],[null,2]],
     bass: ['A1','E2'],
   },
+  { // 4 - Ghost Maze: tiptoe arcade minor — neon corridors, mischief, dread
+    tempo: 2.9,
+    mel: [['D5',1],['F5',1],['A5',1],['G5',1],['F5',1],['E5',2],[null,1],
+          ['D5',1],['E5',1],['F5',2],['A5',1],['G5',1],['F5',2],
+          ['C5',1],['D5',1],['E5',2],['F5',1],[null,1],
+          ['A4',1],['C5',1],['D5',2],[null,2]],
+    bass: ['D2','A2'],
+  },
 ];
 
 class AudioEngine {
@@ -57,6 +65,7 @@ class AudioEngine {
     this.muted = hasLS && localStorage.getItem(LS_KEY) === '1';
     this.themeIdx = 0;
     this.music = true;   // loop on/off (on during play/map, off never — just ducked)
+    this._dotAlt = 0;    // dot blip alternator (waka-waka two-tone)
   }
 
   unlock() {
@@ -194,6 +203,20 @@ class AudioEngine {
       case 'select':  this._seq(['E5'], 0.07, 'square', 0.08); break;
       case 'confirm': this._seq(['C5', 'G5'], 0.08, 'square', 0.09); break;
       case 'wave':    this._seq(['D5', 'A5', 'D6'], 0.09, 'square', 0.11); break;
+      // munch blip with an alternating pitch — the waka-waka carpet bed
+      case 'dot': {
+        this._dotAlt ^= 1;
+        this._tone(this._dotAlt ? 'A5' : 'D6', this.ctx.currentTime, 0.045,
+          'square', 0.05);
+        break;
+      }
+      // power orb: an eerie ladder up — the food chain just flipped
+      case 'power':   this._seq(['D4','A4','D5','F5','A5'], 0.06, 'square', 0.09); break;
+      // a frightened spirit poofs into rest
+      case 'ghostDown':
+        this._slide(900, 120, 0.3, 'sawtooth', 0.07);
+        this._noise(0.08, 0.06);
+        break;
     }
   }
 }

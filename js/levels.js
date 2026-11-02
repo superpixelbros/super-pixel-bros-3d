@@ -1128,6 +1128,187 @@ export function arenaStep(course, frame) {
   }
 }
 
+// ------------------------------------------- STAGE 5: GHOST MAZE (mode 'pac')
+// A Stumble-Guys Pac Map: one shared maze carpeted in dots, four ghost
+// spirits hunting every runner, power orbs that flip the chase, and purist
+// rules — you WIN only by eating the LAST dot; the clock running out is the
+// only other ending. There are no hearts here: a ghost's touch WARPES YOU
+// BACK TO THE START (Stumble Guys' own punishment), dots eaten and all. The
+// AI runners eat too, but their appetite is capped (PAC.aiCap) so every
+// human quota stays mathematically reachable: dots ≥ 2·quota + 3·aiCap.
+// IP guard (AGENTS.md): the LAYOUT and the spirits are original — mechanics
+// homage only, nothing from Namco's maze, ghosts, or art.
+//
+// The grid is a hand-authored ASCII map (one char per cell):
+//   '#' wall · '.' dot · 'o' power orb · S/P human pads · p rival pads · g
+//   ghost deploy. Cell (i,j) maps to world x=(j−(cols−1)/2)·pitch,
+//   z=(i−(rows−1)/2)·pitch — the pen sits exactly at the world origin and
+//   the tower cam centers with it. The whole floor is ONE fixed slab and
+//   every wall a fixed box: no kinematic surface you can walk on, so the
+//   documented seam freeze cannot happen; diagonal leaks are impossible
+//   because wall boxes meet corner-to-corner. Wall COLLIDERS stand 2.4m
+//   (the visual trim stays low) — Scoozy's ~1.5m apex cannot mount them.
+
+export const PAC = {
+  pitch: 2.4,        // one full cell per corridor/wall block — chunky arcade scale
+  wallTop: 2.4,      // collider height (meshes draw far lower — see the note above)
+  dur: 150,          // seconds; headless asserts ≥ 1.6× the slowest bot's full clear
+  quota: 24,         // personal target when the board empties (2P: BOTH must hit it)
+  aiCap: 9,          // per-AI-runner appetite cap — keeps quotas reachable by law
+  frightF: 7 * 60,   // power window (frames)
+  frightSlow: 0.55,  // ghost drive while frightened (the brain scales its unit vector)
+  poofF: 6 * 60,     // a frightened spirit eaten by a runner rests this long before redeploying
+  stunF: 54,         // spirit-shove stagger (~0.9s) — the ACTION button here
+  mercyF: 90,        // post-warp grace: ghosts get no second bite for ~1.5s
+  catchR: 0.8,       // horizontal touch radius (generous but never phantom)
+  shoveR: 1.35,      // spirit-shove reach — same as the punch
+};
+
+// The Ghost Maze layout: left/right mirror-symmetric, pen at the centre,
+// two market streets + twin ring roads + alleys — every cell reachable from
+// S (the flood-fill headless test is the contract). Rivals deploy up top
+// far from the humans; ghosts flank the pen.
+const PAC_ROWS = [
+  '#################',
+  '#.o.p...p...p.o.#',
+  '#.##.###.###.##.#',
+  '#.....g...g.....#',
+  '#.##.#######.##.#',
+  '#.##.#######.##.#',
+  '#.o..#######..o.#',
+  '#.##.#######.##.#',
+  '#.##.#######.##.#',
+  '#....g.PS..g....#',
+  '#.##.###.###.##.#',
+  '#...............#',
+  '#################',
+];
+
+const THEME_PAC = {
+  sky: 0x101526, sand: 0x202c54, sandDark: 0x18224a, rock: 0x37447e,
+  wood: 0x8a5a33, sea: 0x0a0d18, sun: 0xaab8ff, hemiGround: 0x141a2e,
+};
+
+// cell under a world position (rounding is exact — corridors are full cells)
+export function pacCellAt(course, x, z) {
+  const p = course.pac;
+  return {
+    i: Math.round(z / p.pitch + (p.rows.length - 1) / 2),
+    j: Math.round(x / p.pitch + (p.cols - 1) / 2),
+  };
+}
+
+// centre of a cell in world space — the inverse of pacCellAt, the aim point
+// every brain steers toward
+export function pacCenter(course, i, j) {
+  const p = course.pac;
+  return {
+    x: (j - (p.cols - 1) / 2) * p.pitch,
+    z: (i - (p.rows.length - 1) / 2) * p.pitch,
+  };
+}
+
+// open-cell neighbours of (i,j) — the maze graph every brain walks
+export function pacNeighbours(course, i, j) {
+  const g = course.pac.rows;
+  const out = [];
+  if (i > 0 && g[i - 1][j] !== '#') out.push([i - 1, j]);
+  if (i < g.length - 1 && g[i + 1][j] !== '#') out.push([i + 1, j]);
+  if (j > 0 && g[i][j - 1] !== '#') out.push([i, j - 1]);
+  if (j < g[0].length - 1 && g[i][j + 1] !== '#') out.push([i, j + 1]);
+  return out;
+}
+
+// BFS distance field from a target cell over the maze graph — tiny grid, so
+// recomputing it at every junction entry is cheaper than caching it. Shared
+// by ghosts (chase/flee), rival runners AND the headless proofs.
+export function pacDistField(course, ti, tj) {
+  const rows = course.pac.rows;
+  const d = rows.map((r) => new Array(r.length).fill(1e9));
+  if (rows[ti] === undefined || rows[ti][tj] === '#') return d;
+  d[ti][tj] = 0;
+  const q = [[ti, tj]];
+  while (q.length) {
+    const [i, j] = q.shift();
+    for (const [a, b] of pacNeighbours(course, i, j)) {
+      if (d[a][b] !== 1e9) continue;
+      d[a][b] = d[i][j] + 1;
+      q.push([a, b]);
+    }
+  }
+  return d;
+}
+
+export function buildPacMaze(R, world) {
+  const c = newCourse(THEME_PAC);
+  c.isPac = true;
+  const rows = PAC_ROWS;
+  const cols = rows[0].length;
+  const pit = PAC.pitch;
+  const cxOf = (j) => (j - (cols - 1) / 2) * pit;
+  const czOf = (i) => (i - (rows.length - 1) / 2) * pit;
+
+  // one floor slab for the whole arena — feet never touch a seam
+  const gb = world.createRigidBody(R.RigidBodyDesc.fixed()
+    .setTranslation(0, -1, 0));
+  world.createCollider(R.ColliderDesc.cuboid(
+    (cols * pit) / 2 + 1.6, 1, (rows.length * pit) / 2 + 1.6), gb);
+
+  // one fixed wall box per '#' cell
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = 0; j < cols; j++) {
+      if (rows[i][j] !== '#') continue;
+      const b = world.createRigidBody(R.RigidBodyDesc.fixed()
+        .setTranslation(cxOf(j), PAC.wallTop / 2, czOf(i)));
+      world.createCollider(
+        R.ColliderDesc.cuboid(pit / 2, PAC.wallTop / 2, pit / 2), b);
+    }
+  }
+
+  const pac = c.pac = {
+    rows: rows.slice(), cols, pitch: pit, powerT: 0,
+    dots: [], orbs: [], dotAt: [], orbAt: [], deploy: [], pen: { x: 0, z: 0 },
+  };
+  for (let i = 0; i < rows.length; i++) {
+    pac.dotAt.push(new Array(cols).fill(null));
+    pac.orbAt.push(new Array(cols).fill(null));
+  }
+  const pads = [];
+  rows.forEach((row, i) => {
+    for (let j = 0; j < cols; j++) {
+      const ch = row[j];
+      const x = cxOf(j), z = czOf(i);
+      if (ch === '.') {
+        const d = { i, j, x, y: 0.16, z, taken: false };
+        pac.dots.push(d); pac.dotAt[i][j] = d;
+      } else if (ch === 'o') {
+        const u = { i, j, x, y: 0.42, z, taken: false };
+        pac.orbs.push(u); pac.orbAt[i][j] = u;
+      } else if (ch === 'S' || ch === 'P' || ch === 'p') pads.push([x, z]);
+      else if (ch === 'g') pac.deploy.push({ x, y: 1.6, z });
+    }
+  });
+
+  // row-major pads: S(P1), P(P2), then the three rival slots — exactly the
+  // order Game.start consumes them (players first, rivals after)
+  c.spawnPads = pads;
+  const s0 = pads[0];
+  c.spawn = { x: s0[0], y: 1.6, z: s0[1] };
+  c.finishZ = Infinity;           // there is no flag — only the last dot
+  c.coinTotal = 0;
+
+  // --- ambient life: lanterns on the outer wall + drifting wisps ---------
+  c.decor.push(
+    { kind: 'lantern', x: cxOf(-1), z: czOf(0), ph: 0 },
+    { kind: 'lantern', x: cxOf(cols), z: czOf(0), ph: 1.3 },
+    { kind: 'lantern', x: cxOf(-1), z: czOf(rows.length - 1), ph: 2.4 },
+    { kind: 'lantern', x: cxOf(cols), z: czOf(rows.length - 1), ph: 3.6 },
+    { kind: 'firefly', x: cxOf(8), y: 2.0, z: czOf(3), ph: 0.4, r: 2.2 },
+    { kind: 'firefly', x: cxOf(8), y: 2.0, z: czOf(9), ph: 2.1, r: 2.2 },
+  );
+  return c;
+}
+
 // The moment a hero overlaps a damaging hazard: returns a knockback vector
 // {kx, kz} (m/s) or null. Invulnerability / hearts are the hero's concern.
 // Boxes are one-frame-laggy vs the rendered pose (queries see the previous
@@ -1213,4 +1394,11 @@ export const LEVELS = [
     theme: THEME_CRATES, mode: 'crates', passPlace: 99 },
   { id: 'arena', nameKey: 'level.arena', build: buildArena, theme: THEME_ARENA,
     mode: 'survival', passPlace: 99 },
+  { id: 'pac', nameKey: 'level.pac', build: buildPacMaze, theme: THEME_PAC,
+    mode: 'pac', passPlace: 99 },
 ];
+
+// Challenge nodes — the arena and the Ghost Maze — sit BESIDE the frontier:
+// always visitable from the map, never advance it, never feed the trophy.
+// game.js routes every "is this a pub challenge" question through here.
+export const isChallenge = (def) => def.mode === 'survival' || def.mode === 'pac';
