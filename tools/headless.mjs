@@ -19,7 +19,7 @@ import {
   pacCellAt, pacCenter, pacNeighbours, pacDistField,
 } from '../js/levels.js';
 import { Player, HERO_IDS, CHARACTERS, stepHeroGrid } from '../js/hero.js';
-import { crateHop } from '../js/rivals.js';
+import { crateHop, RIVAL_DEFS } from '../js/rivals.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const jsDir = join(here, '..', 'js');
@@ -44,10 +44,14 @@ const usedKeys = new Set();
 for (const f of readdirSync(jsDir)) {
   if (!f.endsWith('.js')) continue;
   const src = readFileSync(join(jsDir, f), 'utf8');
-  for (const m of src.matchAll(/\bt\(\s*'([^']+)'/g)) usedKeys.add(m[1]);
+  for (const m of src.matchAll(/\bt\(\s*'([^']+)'\s*[,)]/g)) usedKeys.add(m[1]);
   // template keys are hero.<id>.name/.blurb — expand them
   for (const m of src.matchAll(/t\(\s*`hero\.\$\{(?:id|heroId)\}\.(\w+)`/g)) {
     for (const id of HERO_IDS) usedKeys.add(`hero.${id}.${m[1]}`);
+  }
+  // concat keys are rival.<id> — expand across the rival roster
+  if (/\bt\(\s*'rival\.'\s*\+/.test(src)) {
+    for (const rd of RIVAL_DEFS) usedKeys.add(`rival.${rd.id}`);
   }
 }
 for (const k of usedKeys) ok(k in TABLES.en, `t('${k}') resolves`);
@@ -1340,6 +1344,30 @@ console.log('free-mode facing');
   ok(Math.abs(rg.player.yaw) < 0.5,
     `race auto-run still faces the flag (yaw=${rg.player.yaw.toFixed(2)})`);
   rg.disposeWorld();
+}
+
+// ---- 17) map launch stride ---------------------------------------------------
+// ENTER on a stage node walks the hero onto the stage BEFORE gameplay —
+// mapStep() cues the level exactly once when the ~0.8s stride lands.
+console.log('map launch stride');
+{
+  const lg = new Game(R);
+  lg.enterMap(true);
+  ok(lg.beginLaunch() && !!lg.map.launch, 'ENTER on Stage 1 starts a launch stride');
+  lg.mapMove(1);
+  ok(lg.map.cursor === 0, 'the cursor is pinned mid-stride');
+  let done = -1;
+  let f = 0;
+  for (; f < 60 && done < 0; f++) done = lg.mapStep();
+  ok(done === 0, `the stride cues Stage 1 within a second (tick ${f})`);
+  ok(!lg.map.launch && lg.mapStep() === -1, 'the launch slot frees and never re-fires');
+  // off-map a pending stride must never fire (Q to title mid-stride)
+  lg.beginLaunch();
+  lg.state = 'title';
+  ok(lg.mapStep() === -1, 'a stale stride can never launch from another screen');
+  lg.enterMap(false);
+  ok(!lg.map.launch, 'entering the map clears any stale stride');
+  lg.disposeWorld();
 }
 
 console.log('\nall headless checks passed');

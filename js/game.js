@@ -27,7 +27,7 @@ export default class Game {
     this.player = null;
     this.frontier = 0;                   // highest stage unlocked to play
     this.levelIndex = 0;
-    this.map = { cursor: 0, walk: null }; // walk: {from, to, t 0..1}
+    this.map = { cursor: 0, walk: null, launch: null }; // walk {from,to,t}; launch {level,t}
     this.sfx = () => {};                 // main.js injects the audio hook
     this.hazardsOff = false;             // geometry-only bots (headless)
     this.gatesOff = false;               // race-rule gates off for bots
@@ -71,12 +71,13 @@ export default class Game {
   enterMap(fromStart = false) {
     this.map.cursor = fromStart ? 0 : this.frontier;
     this.map.walk = null;
+    this.map.launch = null;
     this.disposeWorld();
     this.state = 'map';
   }
 
   mapMove(d) {
-    if (this.map.walk) return;
+    if (this.map.walk || this.map.launch) return;
     let hi = this.frontier;
     // challenge nodes (arena, Ghost Maze) are ALWAYS visitable, unlocks be
     // damned — they are pub challenges, not frontier stages
@@ -90,6 +91,17 @@ export default class Game {
     while (next > 0 && next < hi && locked(next)) next += d > 0 ? 1 : -1;
     if (locked(next)) next = this.map.cursor;
     this.map.cursor = next;
+  }
+
+  // ENTER/✕ on a node starts the LAUNCH STRIDE: the hero walks onto the stage
+  // for ~0.8 s and only then does the level load (mapStep cues it). Refuses
+  // while walking, already launching, off-map, or on a locked node.
+  beginLaunch() {
+    if (this.state !== 'map' || this.map.walk || this.map.launch) return false;
+    const lvl = this.map.cursor;
+    if (lvl > this.frontier && !isChallenge(LEVELS[lvl])) return false;
+    this.map.launch = { level: lvl, t: 0 };
+    return true;
   }
 
   // after clearing a stage: walk the hero onward — race stages into the
@@ -116,17 +128,35 @@ export default class Game {
     return 'map';
   }
 
-  // called every frame while on the map (walk tween at ~1.4s per hop)
+  // called every frame while on the map (walk tween at ~1.4s per hop, launch
+  // stride ~0.8s). Returns a level index EXACTLY ONCE when a launch stride
+  // completes — main loads it then, so play always begins as the hero strides
+  // into the stage. Only ticks while on the map; a stale pending launch can
+  // never fire from another screen.
   mapStep() {
-    if (!this.map.walk) return;
-    this.map.walk.t = Math.min(1, this.map.walk.t + 1 / 84);
-    if (this.map.walk.t >= 1) this.map.walk = null;
+    if (this.map.walk) {
+      this.map.walk.t = Math.min(1, this.map.walk.t + 1 / 84);
+      if (this.map.walk.t >= 1) this.map.walk = null;
+    }
+    const L = this.state === 'map' ? this.map.launch : null;
+    if (L) {
+      L.t = Math.min(1, L.t + 1 / 48);
+      if (L.t >= 1) { this.map.launch = null; return L.level; }
+    }
+    return -1;
   }
 
   // node position for the diorama: node i at x = i * MAP_SPACING, walking eased
   mapHeroPos() {
     const w = this.map.walk;
-    if (!w) return { x: this.map.cursor * MAP_SPACING, walking: false };
+    if (!w) {
+      const L = this.map.launch;
+      if (L) {                        // stride toward the stage gate
+        const e = 1 - (1 - L.t) * (1 - L.t);   // easeOut — confident lunge
+        return { x: (this.map.cursor + 0.38 * e) * MAP_SPACING, walking: true };
+      }
+      return { x: this.map.cursor * MAP_SPACING, walking: false };
+    }
     const e = w.t < 0.5 ? 2 * w.t * w.t : 1 - (1 - w.t) ** 2 * 2; // easeInOut
     return {
       x: (w.from + (w.to - w.from) * e) * MAP_SPACING,

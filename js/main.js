@@ -99,7 +99,7 @@ async function boot() {
     onRetry: () => startLevel(game.levelIndex),
     onTitle: toTitle,
     onMapMove: (d) => { game.mapMove(d); audio.sfx('select'); updateMapUI(); },
-    onMapPlay: () => startLevel(game.map.cursor),
+    onMapPlay: () => { if (game.beginLaunch()) audio.sfx('select'); },
     onDone: handleDone,
     onWinDone: winDone,
     onPlayers: setPlayersMode,
@@ -369,7 +369,7 @@ async function boot() {
       color: run.P.def.color, dots: run.dots, quota: PAC.quota,
     }));
     game.rivals.forEach((r, i) => rows.push({
-      label: `${t('hud.pac.cpu')} ${i + 1}`,
+      label: t('rival.' + r.id),          // DUNE · ZARA · KOMO — their real names
       color: r.player.def.color, dots: r.eaten,
     }));
     if (sorted) rows.sort((a, b) => b.dots - a.dots);
@@ -421,7 +421,10 @@ async function boot() {
     } else if (s === 'map') {
       if (Input.pressed('ArrowLeft') || Input.pressed('KeyA')) { game.mapMove(-1); audio.sfx('select'); updateMapUI(); }
       if (Input.pressed('ArrowRight') || Input.pressed('KeyD')) { game.mapMove(1); audio.sfx('select'); updateMapUI(); }
-      if (Input.pressed('Enter') || Input.pressed('Space')) startLevel(game.map.cursor);
+      if (Input.pressed('Enter') || Input.pressed('Space')) {
+        // walk onto the stage first — the level loads when the stride ends
+        if (game.beginLaunch()) audio.sfx('select');
+      }
       // ESC is the pad's ◯: back out of the map to the title (like Q)
       if (Input.pressed('KeyQ') || Input.pressed('Escape')) toTitle();
     } else if (s === 'play') {
@@ -536,7 +539,10 @@ async function boot() {
         stepFlags = mergeFlags(kb, padFlags(padSlots[0], playing));
       }
       game.step(stepFlags);
-      game.mapStep();
+      // map walk tween + stage-launch stride; when the stride completes the
+      // level actually loads (the hero walks INTO the stage)
+      const launchLvl = game.mapStep();
+      if (launchLvl >= 0) startLevel(launchLvl);
       jumpEdge = false;
       spinEdge = false;
       acc -= STEP_MS;
